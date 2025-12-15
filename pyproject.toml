@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wn_edit"
+dynamic = ["version"]
+description = "A modification add-on for the Python wn (WordNet) module"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Francis Bond", email = "bond@ieee.org" },
+]
+keywords = [
+    "wordnet",
+    "nlp",
+    "linguistics",
+    "lexicon",
+    "semantic",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Linguistic",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "wn>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.urls]
+Homepage = "https://github.com/fcbond/wn_edit"
+Documentation = "https://github.com/fcbond/wn_edit#readme"
+Repository = "https://github.com/fcbond/wn_edit"
+Issues = "https://github.com/fcbond/wn_edit/issues"
+
+[tool.hatch.version]
+path = "wn_edit/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/wn_edit",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["wn_edit"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
+test-cov = "pytest --cov=wn_edit --cov-report=term-missing {args:tests}"
+
+[tool.hatch.envs.mypy]
+dependencies = [
+    "mypy>=1.0",
+]
+
+[tool.hatch.envs.mypy.scripts]
+check = "mypy wn_edit"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP"]
+ignore = ["D1"]  # Don't require docstrings everywhere during development
