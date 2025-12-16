@@ -44,13 +44,13 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/fcbond/wn_edit"
-Documentation = "https://github.com/fcbond/wn_edit#readme"
-Repository = "https://github.com/fcbond/wn_edit"
-Issues = "https://github.com/fcbond/wn_edit/issues"
+Homepage = "https://github.com/bond-lab/wn_edit"
+Documentation = "https://github.com/bond-lab/wn_edit#readme"
+Repository = "https://github.com/bond-lab/wn_edit"
+Issues = "https://github.com/bond-lab/wn_edit/issues"
 
 [tool.hatch.version]
-path = "wn_edit/__init__.py"
+path = "wn_edit/version.py"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -61,6 +61,7 @@ include = [
 packages = ["wn_edit"]
 
 [tool.hatch.envs.default]
+python = "3.13"
 dependencies = [
     "pytest>=7.0",
     "pytest-cov",
@@ -71,6 +72,7 @@ test = "pytest {args:tests}"
 test-cov = "pytest --cov=wn_edit --cov-report=term-missing {args:tests}"
 
 [tool.hatch.envs.mypy]
+python = "3.13"
 dependencies = [
     "mypy>=1.0",
 ]
@@ -80,10 +82,13 @@ check = "mypy wn_edit"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "-v -m 'not slow'"
+markers = [
+    "slow: marks tests as slow (run with: pytest -m slow)",
+]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 

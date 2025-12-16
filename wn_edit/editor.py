@@ -15,18 +15,36 @@ The wn.lmf module uses TypedDict-style dictionaries for its data structures:
 This editor works directly with these structures.
 """
 
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Set
 from pathlib import Path
 import uuid
+import warnings
 
 try:
     import wn
     from wn import lmf
+    from wn import constants as wn_constants
     HAS_WN = True
+    # Get relation constants from wn.constants
+    SYNSET_RELATIONS: Set[str] = wn_constants.SYNSET_RELATIONS
+    SENSE_RELATIONS: Set[str] = wn_constants.SENSE_RELATIONS
+    # Try to import validation module
+    try:
+        from wn import validate as wn_validate
+        HAS_WN_VALIDATE = True
+    except ImportError:
+        HAS_WN_VALIDATE = False
+        wn_validate = None
 except ImportError:
     HAS_WN = False
+    HAS_WN_VALIDATE = False
     wn = None
     lmf = None
+    wn_constants = None
+    wn_validate = None
+    # Provide empty sets as fallback when wn is not installed
+    SYNSET_RELATIONS = set()
+    SENSE_RELATIONS = set()
 
 
 # Default LMF version
@@ -61,6 +79,8 @@ def make_lexicon(
     """Create a Lexicon dictionary.
     
     Note: Uses 'entries' (not 'entries') to match wn.lmf structure.
+    The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
     """
     lex = {
         'id': id,
@@ -71,6 +91,7 @@ def make_lexicon(
         'version': version,
         'entries': entries or [],
         'synsets': synsets or [],
+        'meta': meta,  # Required by wn.add_lexical_resource()
     }
     if url:
         lex['url'] = url
@@ -78,8 +99,6 @@ def make_lexicon(
         lex['citation'] = citation
     if frames:
         lex['frames'] = frames
-    if meta:
-        lex['meta'] = meta
     return lex
 
 
@@ -91,18 +110,21 @@ def make_lexical_entry(
     syntactic_behaviours: Optional[List[str]] = None,
     meta: Optional[Dict] = None,
 ) -> Dict:
-    """Create a LexicalEntry dictionary."""
+    """Create a LexicalEntry dictionary.
+    
+    Note: The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
+    """
     entry = {
         'id': id,
         'lemma': lemma,
         'senses': senses or [],
+        'meta': meta,  # Required by wn.add_lexical_resource()
     }
     if forms:
         entry['forms'] = forms
     if syntactic_behaviours:
         entry['syntactic_behaviours'] = syntactic_behaviours
-    if meta:
-        entry['meta'] = meta
     return entry
 
 
@@ -140,10 +162,15 @@ def make_sense(
     subcat: Optional[List[str]] = None,
     meta: Optional[Dict] = None,
 ) -> Dict:
-    """Create a Sense dictionary."""
+    """Create a Sense dictionary.
+    
+    Note: The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
+    """
     sense = {
         'id': id,
         'synset': synset,
+        'meta': meta,  # Required by wn.add_lexical_resource()
     }
     if relations:
         sense['relations'] = relations
@@ -155,8 +182,6 @@ def make_sense(
         sense['adjposition'] = adjposition
     if subcat:
         sense['subcat'] = subcat
-    if meta:
-        sense['meta'] = meta
     return sense
 
 
@@ -174,12 +199,15 @@ def make_synset(
     
     Note: The 'ili' key is always included (defaults to empty string)
     because wn.lmf.dump() requires it to be present.
+    The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
     Uses 'partOfSpeech' to match wn.lmf structure.
     """
     synset = {
         'id': id,
         'partOfSpeech': pos,
         'ili': ili or '',  # Required by wn.lmf.dump()
+        'meta': meta,  # Required by wn.add_lexical_resource()
     }
     if definitions:
         synset['definitions'] = definitions
@@ -189,42 +217,68 @@ def make_synset(
         synset['relations'] = relations
     if examples:
         synset['examples'] = examples
-    if meta:
-        synset['meta'] = meta
     return synset
 
 
 def make_definition(text: str, language: Optional[str] = None, source_sense: Optional[str] = None, meta: Optional[Dict] = None) -> Dict:
-    """Create a Definition dictionary."""
-    d = {'text': text}
+    """Create a Definition dictionary.
+    
+    Note: The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
+    """
+    d = {'text': text, 'meta': meta}
     if language:
         d['language'] = language
     if source_sense:
         d['source_sense'] = source_sense
-    if meta:
-        d['meta'] = meta
     return d
 
 
 def make_example(text: str, language: Optional[str] = None, meta: Optional[Dict] = None) -> Dict:
-    """Create an Example dictionary."""
-    e = {'text': text}
+    """Create an Example dictionary.
+    
+    Note: The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
+    """
+    e = {'text': text, 'meta': meta}
     if language:
         e['language'] = language
-    if meta:
-        e['meta'] = meta
     return e
 
 
-def make_relation(target: str, rel_type: str, meta: Optional[Dict] = None) -> Dict:
+def make_relation(
+    target: str,
+    rel_type: str,
+    meta: Optional[Dict] = None,
+    validate: bool = False,
+    relation_kind: str = 'synset',
+) -> Dict:
     """Create a Relation dictionary (works for both SynsetRelation and SenseRelation).
     
     Note: Uses 'relType' (camelCase) as required by wn.lmf.dump().
+    The 'meta' key is always included (defaults to None) because
+    wn.add_lexical_resource() requires it to be present.
+    
+    Args:
+        target: Target synset or sense ID
+        rel_type: Relation type (e.g., 'hypernym', 'antonym')
+        meta: Optional metadata dictionary
+        validate: If True, warn if rel_type is not in standard WN-LMF relations
+        relation_kind: 'synset' or 'sense' - used for validation
+        
+    Returns:
+        Relation dictionary
     """
-    r = {'target': target, 'relType': rel_type}
-    if meta:
-        r['meta'] = meta
-    return r
+    if validate:
+        valid_relations = SYNSET_RELATIONS if relation_kind == 'synset' else SENSE_RELATIONS
+        if rel_type not in valid_relations:
+            warnings.warn(
+                f"Relation type '{rel_type}' is not a standard WN-LMF {relation_kind} relation. "
+                f"Valid relations: {sorted(valid_relations)[:10]}... (see SYNSET_RELATIONS or SENSE_RELATIONS)",
+                UserWarning
+            )
+    
+    return {'target': target, 'relType': rel_type, 'meta': meta}
 
 
 def make_form(written_form: str, script: Optional[str] = None, tags: Optional[List[Dict]] = None) -> Dict:
@@ -610,7 +664,11 @@ class WordnetEditor:
         return synset
     
     def remove_synset(self, synset_id: str) -> None:
-        """Remove a synset and all senses pointing to it."""
+        """Remove a synset and all senses pointing to it.
+        
+        Also removes any lexical entries that become empty (no senses left)
+        after removing senses pointing to this synset.
+        """
         synset = self._synset_by_id.get(synset_id)
         if synset is None:
             raise KeyError(f"Synset not found: {synset_id}")
@@ -626,14 +684,27 @@ class WordnetEditor:
             entry['senses'] = [
                 s for s in entry.get('senses', []) if s['synset'] != synset_id
             ]
+        
+        # Remove entries that no longer have any senses
+        self._lexicon['entries'] = [
+            e for e in self._lexicon['entries'] if e.get('senses')
+        ]
     
     def add_synset_relation(
         self,
         source_id: str,
         target_id: str,
         rel_type: str,
+        validate: bool = True,
     ) -> None:
-        """Add a relation between synsets."""
+        """Add a relation between synsets.
+        
+        Args:
+            source_id: Source synset ID
+            target_id: Target synset ID
+            rel_type: Relation type (e.g., 'hypernym', 'hyponym', 'similar')
+            validate: If True (default), warn if rel_type is not a standard relation
+        """
         synset = self._synset_by_id.get(source_id)
         if synset is None:
             raise KeyError(f"Source synset not found: {source_id}")
@@ -641,7 +712,9 @@ class WordnetEditor:
         if 'relations' not in synset:
             synset['relations'] = []
         
-        synset['relations'].append(make_relation(target_id, rel_type))
+        synset['relations'].append(
+            make_relation(target_id, rel_type, validate=validate, relation_kind='synset')
+        )
     
     # =========================================================================
     # Word/Entry Operations
@@ -740,15 +813,25 @@ class WordnetEditor:
         source_sense_id: str,
         target_id: str,
         rel_type: str,
+        validate: bool = True,
     ) -> None:
-        """Add a relation from a sense."""
+        """Add a relation from a sense.
+        
+        Args:
+            source_sense_id: Source sense ID
+            target_id: Target sense or synset ID
+            rel_type: Relation type (e.g., 'antonym', 'derivation', 'pertainym')
+            validate: If True (default), warn if rel_type is not a standard relation
+        """
         # Find the sense
         for entry in self._lexicon['entries']:
             for sense in entry.get('senses', []):
                 if sense['id'] == source_sense_id:
                     if 'relations' not in sense:
                         sense['relations'] = []
-                    sense['relations'].append(make_relation(target_id, rel_type))
+                    sense['relations'].append(
+                        make_relation(target_id, rel_type, validate=validate, relation_kind='sense')
+                    )
                     return
         
         raise KeyError(f"Sense not found: {source_sense_id}")
@@ -757,20 +840,77 @@ class WordnetEditor:
     # Export and Commit
     # =========================================================================
     
-    def export(self, filepath: Union[str, Path]) -> None:
+    def validate(self) -> List[str]:
+        """
+        Validate the lexicon using wn.validate if available.
+        
+        Returns:
+            List of validation error/warning messages (empty if valid)
+            
+        Raises:
+            ImportError: If wn.validate is not available
+        """
+        if not HAS_WN_VALIDATE:
+            raise ImportError(
+                "wn.validate module not available. "
+                "Make sure you have a recent version of wn installed."
+            )
+        
+        # Export to temp file for validation
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.xml', delete=False
+        ) as f:
+            temp_path = f.name
+        
+        try:
+            self.export(temp_path)
+            # Run wn validate
+            # wn.validate returns validation results
+            results = wn_validate.validate(temp_path)
+            return results if results else []
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+    
+    def export(
+        self,
+        filepath: Union[str, Path],
+        validate_first: bool = False,
+    ) -> None:
         """
         Export the lexicon to a WN-LMF XML file using wn.lmf.dump().
         
         Args:
             filepath: Output file path
+            validate_first: If True, validate before export and raise on errors
         """
+        if validate_first:
+            errors = self.validate()
+            if errors:
+                raise ValueError(f"Validation failed: {errors}")
+        
         filepath = Path(filepath)
         lmf.dump(self._resource, filepath)
     
-    def commit(self) -> None:
+    def commit(self, validate_first: bool = False) -> None:
         """
         Commit changes to the wn database using wn.add_lexical_resource().
+        
+        Note: When committing to an existing lexicon that was loaded from the
+        database, you may want to update the version number first using
+        set_version() or update_metadata().
+        
+        Args:
+            validate_first: If True, validate before commit and raise on errors
         """
+        if validate_first:
+            errors = self.validate()
+            if errors:
+                raise ValueError(f"Validation failed: {errors}")
+        
         wn.add_lexical_resource(self._resource)
     
     # =========================================================================

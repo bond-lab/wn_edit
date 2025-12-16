@@ -38,23 +38,23 @@ class TestHelperFunctions:
     def test_make_definition(self):
         """Test creating a definition dict."""
         d = make_definition("A test definition")
-        assert d == {"text": "A test definition"}
+        assert d == {"text": "A test definition", "meta": None}
         
         d = make_definition("Another definition", language="en")
-        assert d == {"text": "Another definition", "language": "en"}
+        assert d == {"text": "Another definition", "language": "en", "meta": None}
     
     def test_make_example(self):
         """Test creating an example dict."""
         e = make_example("This is an example sentence.")
-        assert e == {"text": "This is an example sentence."}
+        assert e == {"text": "This is an example sentence.", "meta": None}
         
         e = make_example("Another example", language="en")
-        assert e == {"text": "Another example", "language": "en"}
+        assert e == {"text": "Another example", "language": "en", "meta": None}
     
     def test_make_relation(self):
         """Test creating a relation dict."""
         r = make_relation("target-synset-id", "hypernym")
-        assert r == {"target": "target-synset-id", "relType": "hypernym"}
+        assert r == {"target": "target-synset-id", "relType": "hypernym", "meta": None}
     
     def test_make_lemma(self):
         """Test creating a lemma dict."""
@@ -78,7 +78,7 @@ class TestHelperFunctions:
     def test_make_sense(self):
         """Test creating a sense dict."""
         s = make_sense("sense-001", "synset-001")
-        assert s == {"id": "sense-001", "synset": "synset-001"}
+        assert s == {"id": "sense-001", "synset": "synset-001", "meta": None}
         
         s = make_sense(
             "sense-002",
@@ -87,13 +87,14 @@ class TestHelperFunctions:
         )
         assert s["id"] == "sense-002"
         assert s["synset"] == "synset-002"
+        assert s["meta"] is None
         assert len(s["relations"]) == 1
         assert s["relations"][0]["relType"] == "antonym"
     
     def test_make_synset(self):
         """Test creating a synset dict."""
         ss = make_synset("synset-001", "n")
-        assert ss == {"id": "synset-001", "partOfSpeech": "n", "ili": ""}
+        assert ss == {"id": "synset-001", "partOfSpeech": "n", "ili": "", "meta": None}
         
         ss = make_synset(
             "synset-002",
@@ -105,6 +106,7 @@ class TestHelperFunctions:
         assert ss["id"] == "synset-002"
         assert ss["partOfSpeech"] == "v"
         assert ss["ili"] == "i12345"
+        assert ss["meta"] is None
         assert len(ss["definitions"]) == 1
         assert len(ss["examples"]) == 1
     
@@ -117,6 +119,7 @@ class TestHelperFunctions:
         assert entry["id"] == "entry-001"
         assert entry["lemma"]["writtenForm"] == "dog"
         assert entry["senses"] == []
+        assert entry["meta"] is None
         
         entry = make_lexical_entry(
             "entry-002",
@@ -142,6 +145,7 @@ class TestHelperFunctions:
         assert lex["language"] == "en"
         assert lex["entries"] == []
         assert lex["synsets"] == []
+        assert lex["meta"] is None
     
     def test_make_lexical_resource(self):
         """Test creating a lexical resource dict."""
@@ -783,4 +787,3 @@ class TestWordnetEditorRoundTrip:
         cats = editor3.find_entries("cat")
         assert len(dogs) == 1
         assert len(cats) == 1
-        
