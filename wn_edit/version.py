@@ -1,1 +1,3 @@
-__version__ = '0.10.0'
+"""Version information for wn_edit."""
+
+__version__ = '0.3.0'

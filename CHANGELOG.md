@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-16
+
+### Added
+
+- Integration test suite (`test_wn_integration.py`) verifying `commit()` works correctly:
+  - Tests for querying committed synsets via `wn.synsets()`
+  - Tests for lemmas, hypernyms, hypernym paths, examples
+  - Tests for ILI identifier support
+  - Tests for `wn.Wordnet()`, `wn.words()`, `wn.senses()`
+  - Full round-trip test: create → commit → query → export
+- Round-trip fidelity test suite (`test_roundtrip_fidelity.py`):
+  - Tests that loading OEWN, making minimal changes, and exporting preserves all data
+  - Marked as `slow` and skipped by default (run with `hatch test -- -m slow`)
+  - Automatic OEWN download if not installed
+
+### Fixed
+
+- `commit()` now works correctly with `wn.add_lexical_resource()`:
+  - All data structures now include required `meta` key (even if `None`)
+  - Affected: `make_lexicon()`, `make_synset()`, `make_sense()`, `make_lexical_entry()`,
+    `make_definition()`, `make_example()`, `make_relation()`
+- `remove_synset()` now properly cleans up orphaned lexical entries:
+  - Entries with no remaining senses are automatically removed
+  - Entries with other senses are preserved
+
+### Changed
+
+- Test cleanup now uses `wn.remove()` with wildcard patterns for reliable isolation
+
+## [0.2.0] - 2025-12-15
+
+### Added
+
+- Full compatibility with `wn.lmf` TypedDict structures
+- Key names updated to match wn.lmf expectations:
+  - `entries` (not `lexical_entries`)
+  - `writtenForm` (not `written_form`)
+  - `partOfSpeech` (not `part_of_speech`)
+  - `relType` (not `rel_type`)
+
 ## [0.1.0] - 2024-12-15
 
 ### Added
