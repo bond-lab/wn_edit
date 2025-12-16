@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-12-16
+
+### Added
+
+- Validation for parts of speech using `wn.constants.PARTS_OF_SPEECH`:
+  - `validate_pos()` function to check POS values
+  - `make_lemma()` and `make_synset()` now validate POS automatically
+- Validation for adjective positions using `ADJPOSITIONS`:
+  - `validate_adjposition()` function to check adjposition values ('a', 'p', 'ip')
+  - `make_sense()` now validates adjposition if provided
+- Validation for sense counts:
+  - `validate_count()` function to ensure counts are non-negative integers
+  - `make_count()` helper function to create count dictionaries with validation
+- New constants exported:
+  - `PARTS_OF_SPEECH` - valid part of speech tags (from `wn.constants`)
+  - `ADJPOSITIONS` - valid adjective positions ('a', 'p', 'ip')
+
 ## [0.3.0] - 2025-12-16
 
 ### Added

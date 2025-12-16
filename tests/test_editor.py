@@ -23,13 +23,68 @@ from wn_edit.editor import (
     make_synset,
     make_definition,
     make_example,
+    make_count,
     make_relation,
     make_form,
+    validate_pos,
+    validate_count,
+    PARTS_OF_SPEECH,
     HAS_WN,
 )
 
 # Skip tests that require wn if it's not installed
 requires_wn = pytest.mark.skipif(not HAS_WN, reason="wn package not installed")
+
+
+class TestValidation:
+    """Tests for validation helper functions."""
+    
+    def test_validate_pos_valid(self):
+        """Test that valid POS values pass validation."""
+        for pos in ['n', 'v', 'a', 'r', 's']:
+            validate_pos(pos)  # Should not raise
+    
+    def test_validate_pos_invalid(self):
+        """Test that invalid POS values raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_pos('invalid_pos_value')
+        assert "Invalid part of speech: 'invalid_pos_value'" in str(exc_info.value)
+        assert "Must be one of:" in str(exc_info.value)
+    
+    def test_validate_pos_custom_context(self):
+        """Test custom context in validation error message."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_pos('invalid', "synset part of speech")
+        assert "Invalid synset part of speech: 'invalid'" in str(exc_info.value)
+    
+    def test_validate_count_valid(self):
+        """Test that valid count values pass validation."""
+        assert validate_count(0) == 0
+        assert validate_count(42) == 42
+        assert validate_count("100") == 100  # String convertible to int
+    
+    def test_validate_count_invalid_type(self):
+        """Test that non-integer values raise TypeError."""
+        with pytest.raises(TypeError) as exc_info:
+            validate_count("not a number")
+        assert "Must be an integer" in str(exc_info.value)
+    
+    def test_validate_count_negative(self):
+        """Test that negative counts raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_count(-1)
+        assert "Must be non-negative" in str(exc_info.value)
+    
+    def test_parts_of_speech_constant(self):
+        """Test PARTS_OF_SPEECH contains expected values."""
+        # These are the standard WordNet POS tags that should always be present
+        assert 'n' in PARTS_OF_SPEECH  # noun
+        assert 'v' in PARTS_OF_SPEECH  # verb
+        assert 'a' in PARTS_OF_SPEECH  # adjective
+        assert 'r' in PARTS_OF_SPEECH  # adverb
+        # 's' (satellite adjective) may or may not be present depending on wn version
+        # Just verify we have at least the core 4
+        assert len(PARTS_OF_SPEECH) >= 4
 
 
 class TestHelperFunctions:
@@ -65,6 +120,12 @@ class TestHelperFunctions:
         assert lemma["writtenForm"] == "café"
         assert lemma["partOfSpeech"] == "n"
         assert lemma["script"] == "Latn"
+    
+    def test_make_lemma_invalid_pos(self):
+        """Test that make_lemma rejects invalid POS."""
+        with pytest.raises(ValueError) as exc_info:
+            make_lemma("word", "invalid_pos")
+        assert "Invalid part of speech" in str(exc_info.value)
     
     def test_make_form(self):
         """Test creating a form dict."""
@@ -109,6 +170,33 @@ class TestHelperFunctions:
         assert ss["meta"] is None
         assert len(ss["definitions"]) == 1
         assert len(ss["examples"]) == 1
+    
+    def test_make_synset_invalid_pos(self):
+        """Test that make_synset rejects invalid POS."""
+        with pytest.raises(ValueError) as exc_info:
+            make_synset("synset-001", "noun")  # Should be 'n', not 'noun'
+        assert "Invalid part of speech" in str(exc_info.value)
+    
+    def test_make_count(self):
+        """Test creating a count dict."""
+        c = make_count(42)
+        assert c == {"value": 42, "meta": None}
+        
+        c = make_count(0, meta={"source": "corpus"})
+        assert c == {"value": 0, "meta": {"source": "corpus"}}
+    
+    def test_make_count_from_string(self):
+        """Test that make_count accepts string integers."""
+        c = make_count("100")
+        assert c == {"value": 100, "meta": None}
+    
+    def test_make_count_invalid(self):
+        """Test that make_count rejects invalid values."""
+        with pytest.raises(TypeError):
+            make_count("not a number")
+        
+        with pytest.raises(ValueError):
+            make_count(-5)
     
     def test_make_lexical_entry(self):
         """Test creating a lexical entry dict."""

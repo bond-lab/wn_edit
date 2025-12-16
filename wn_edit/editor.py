@@ -25,9 +25,15 @@ try:
     from wn import lmf
     from wn import constants as wn_constants
     HAS_WN = True
-    # Get relation constants from wn.constants
+    # Get constants from wn.constants
     SYNSET_RELATIONS: Set[str] = wn_constants.SYNSET_RELATIONS
     SENSE_RELATIONS: Set[str] = wn_constants.SENSE_RELATIONS
+    PARTS_OF_SPEECH: Set[str] = wn_constants.PARTS_OF_SPEECH
+    # Adjective positions (for sense adjposition field)
+    if hasattr(wn_constants, 'ADJPOSITIONS'):
+        ADJPOSITIONS: Set[str] = wn_constants.ADJPOSITIONS
+    else:
+        ADJPOSITIONS = {'a', 'p', 'ip'}  # attributive, predicative, immediate postnominal
     # Try to import validation module
     try:
         from wn import validate as wn_validate
@@ -45,10 +51,77 @@ except ImportError:
     # Provide empty sets as fallback when wn is not installed
     SYNSET_RELATIONS = set()
     SENSE_RELATIONS = set()
+    PARTS_OF_SPEECH = {'n', 'v', 'a', 'r', 's'}
+    ADJPOSITIONS = {'a', 'p', 'ip'}
 
 
 # Default LMF version
 DEFAULT_LMF_VERSION = '1.4'
+
+
+def validate_pos(pos: str, context: str = "part of speech") -> None:
+    """Validate that pos is a valid part of speech.
+    
+    Args:
+        pos: Part of speech to validate
+        context: Description for error message (e.g., "synset", "entry")
+    
+    Raises:
+        ValueError: If pos is not a valid part of speech
+    """
+    if pos not in PARTS_OF_SPEECH:
+        valid = ', '.join(sorted(PARTS_OF_SPEECH))
+        raise ValueError(
+            f"Invalid {context}: '{pos}'. "
+            f"Must be one of: {valid}"
+        )
+
+
+def validate_count(count: Any, context: str = "count") -> int:
+    """Validate and convert count to integer.
+    
+    Args:
+        count: Value to validate (should be int or convertible to int)
+        context: Description for error message
+    
+    Returns:
+        Integer value
+    
+    Raises:
+        TypeError: If count cannot be converted to int
+        ValueError: If count is negative
+    """
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError) as e:
+        raise TypeError(
+            f"Invalid {context}: '{count}'. Must be an integer."
+        ) from e
+    
+    if count_int < 0:
+        raise ValueError(
+            f"Invalid {context}: {count_int}. Must be non-negative."
+        )
+    
+    return count_int
+
+
+def validate_adjposition(adjposition: str, context: str = "adjective position") -> None:
+    """Validate that adjposition is a valid adjective position.
+    
+    Args:
+        adjposition: Adjective position to validate ('a', 'p', 'ip')
+        context: Description for error message
+    
+    Raises:
+        ValueError: If adjposition is not valid
+    """
+    if adjposition not in ADJPOSITIONS:
+        valid = ', '.join(sorted(ADJPOSITIONS))
+        raise ValueError(
+            f"Invalid {context}: '{adjposition}'. "
+            f"Must be one of: {valid}"
+        )
 
 
 def make_lexical_resource(
@@ -138,7 +211,18 @@ def make_lemma(
     """Create a Lemma dictionary.
     
     Note: Uses 'writtenForm' and 'partOfSpeech' to match wn.lmf structure.
+    
+    Args:
+        written_form: The canonical written form of the lemma
+        pos: Part of speech ('n', 'v', 'a', 'r', 's')
+        script: Optional script identifier
+        pronunciations: Optional list of pronunciation dictionaries
+        tags: Optional list of tag dictionaries
+    
+    Raises:
+        ValueError: If pos is not a valid part of speech
     """
+    validate_pos(pos, "part of speech for lemma")
     lemma = {
         'writtenForm': written_form,
         'partOfSpeech': pos,
@@ -166,7 +250,23 @@ def make_sense(
     
     Note: The 'meta' key is always included (defaults to None) because
     wn.add_lexical_resource() requires it to be present.
+    
+    Args:
+        id: Sense identifier
+        synset: ID of the synset this sense belongs to
+        relations: Optional list of sense relations
+        examples: Optional list of example dictionaries
+        counts: Optional list of count dictionaries
+        adjposition: Optional adjective position ('a', 'p', 'ip')
+        subcat: Optional list of subcategorization frame IDs
+        meta: Optional metadata dictionary
+    
+    Raises:
+        ValueError: If adjposition is provided but not valid
     """
+    if adjposition is not None:
+        validate_adjposition(adjposition)
+    
     sense = {
         'id': id,
         'synset': synset,
@@ -202,7 +302,21 @@ def make_synset(
     The 'meta' key is always included (defaults to None) because
     wn.add_lexical_resource() requires it to be present.
     Uses 'partOfSpeech' to match wn.lmf structure.
+    
+    Args:
+        id: Synset identifier
+        pos: Part of speech ('n', 'v', 'a', 'r', 's')
+        ili: Interlingual Index identifier
+        definitions: List of definition dictionaries
+        ili_definition: ILI definition dictionary
+        relations: List of relation dictionaries
+        examples: List of example dictionaries
+        meta: Optional metadata dictionary
+    
+    Raises:
+        ValueError: If pos is not a valid part of speech
     """
+    validate_pos(pos, "part of speech for synset")
     synset = {
         'id': id,
         'partOfSpeech': pos,
@@ -244,6 +358,24 @@ def make_example(text: str, language: Optional[str] = None, meta: Optional[Dict]
     if language:
         e['language'] = language
     return e
+
+
+def make_count(value: Any, meta: Optional[Dict] = None) -> Dict:
+    """Create a Count dictionary for sense frequency counts.
+    
+    Args:
+        value: The count value (must be a non-negative integer)
+        meta: Optional metadata dictionary
+    
+    Returns:
+        Count dictionary with 'value' and 'meta' keys
+    
+    Raises:
+        TypeError: If value cannot be converted to int
+        ValueError: If value is negative
+    """
+    count_int = validate_count(value, "sense count")
+    return {'value': count_int, 'meta': meta}
 
 
 def make_relation(

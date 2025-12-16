@@ -48,12 +48,22 @@ from .editor import (
     make_synset,
     make_definition,
     make_example,
+    make_count,
     make_relation,
     make_form,
+    # Validation helpers
+    validate_pos,
+    validate_count,
+    validate_adjposition,
     HAS_WN,
+    HAS_WN_VALIDATE,
+    # Constants
+    SYNSET_RELATIONS,
+    SENSE_RELATIONS,
+    PARTS_OF_SPEECH,
+    ADJPOSITIONS,
 )
-
-__version__ = '0.01.0'
+from .version import __version__
 
 __all__ = [
     'WordnetEditor',
@@ -67,7 +77,18 @@ __all__ = [
     'make_synset',
     'make_definition',
     'make_example',
+    'make_count',
     'make_relation',
     'make_form',
+    # Validation helpers
+    'validate_pos',
+    'validate_count',
+    'validate_adjposition',
     'HAS_WN',
+    'HAS_WN_VALIDATE',
+    # Constants
+    'SYNSET_RELATIONS',
+    'SENSE_RELATIONS',
+    'PARTS_OF_SPEECH',
+    'ADJPOSITIONS',
 ]
