@@ -643,7 +643,267 @@ class TestWordnetEditorMetadata:
 
 
 @requires_wn
-class TestWordnetEditorRoundTrip:
+class TestWordnetEditorMetadataOverride:
+    """Tests for metadata override when loading existing lexicons."""
+    
+    @pytest.fixture
+    def source_xml(self, tmp_path):
+        """Create a source XML file to load from."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor(
+            create_new=True,
+            lexicon_id="source-wn",
+            label="Source WordNet",
+            version="1.0",
+            email="source@example.com",
+            license="https://example.com/license",
+        )
+        
+        # Add some content
+        editor.create_synset(
+            pos="n",
+            definition="A test concept",
+            words=["testword"],
+        )
+        
+        output_file = tmp_path / "source.xml"
+        editor.export(output_file)
+        return output_file
+    
+    def test_override_lexicon_id_on_load(self, source_xml):
+        """Test that lexicon_id can be overridden when loading."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        
+        # Original ID
+        assert editor.lexicon["id"] == "source-wn"
+        
+        # Now load with override - need to use set_id after loading
+        editor2 = WordnetEditor.load_from_file(source_xml)
+        editor2.set_id("derived-wn")
+        
+        assert editor2.lexicon["id"] == "derived-wn"
+        # Other metadata should be unchanged
+        assert editor2.lexicon["label"] == "Source WordNet"
+        assert editor2.lexicon["version"] == "1.0"
+    
+    def test_override_version_on_load(self, source_xml):
+        """Test that version can be overridden when loading."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        editor.set_version("2.0-derived")
+        
+        assert editor.lexicon["version"] == "2.0-derived"
+        # Other metadata should be unchanged
+        assert editor.lexicon["id"] == "source-wn"
+        assert editor.lexicon["label"] == "Source WordNet"
+    
+    def test_override_label_on_load(self, source_xml):
+        """Test that label can be overridden when loading."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        editor.set_label("Derived WordNet with Extensions")
+        
+        assert editor.lexicon["label"] == "Derived WordNet with Extensions"
+    
+    def test_override_multiple_metadata_on_load(self, source_xml):
+        """Test overriding multiple metadata fields when loading."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        editor.set_id("derived-wn")
+        editor.set_version("2.0")
+        editor.set_label("Derived WordNet")
+        
+        assert editor.lexicon["id"] == "derived-wn"
+        assert editor.lexicon["version"] == "2.0"
+        assert editor.lexicon["label"] == "Derived WordNet"
+        # Content should be preserved
+        assert editor.stats()["synsets"] == 1
+        assert editor.stats()["entries"] == 1
+    
+    def test_override_metadata_persists_in_export(self, source_xml, tmp_path):
+        """Test that overridden metadata is preserved when exporting."""
+        from wn_edit import WordnetEditor
+        from wn import lmf
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        editor.set_id("derived-wn")
+        editor.set_version("2.0")
+        editor.set_label("Derived WordNet")
+        
+        output_file = tmp_path / "derived.xml"
+        editor.export(output_file)
+        
+        # Load and verify
+        resource = lmf.load(output_file)
+        lexicon = resource["lexicons"][0]
+        
+        assert lexicon["id"] == "derived-wn"
+        assert lexicon["version"] == "2.0"
+        assert lexicon["label"] == "Derived WordNet"
+        # Content should be preserved
+        assert len(lexicon["synsets"]) == 1
+        assert len(lexicon["entries"]) == 1
+    
+    def test_set_id_method(self):
+        """Test the set_id method works correctly."""
+        from wn_edit import WordnetEditor
+        
+        editor = WordnetEditor(
+            create_new=True,
+            lexicon_id="original-id",
+            label="Test WordNet",
+        )
+        
+        assert editor.lexicon["id"] == "original-id"
+        
+        editor.set_id("new-id")
+        
+        assert editor.lexicon["id"] == "new-id"
+    
+    def test_lmf_version_can_be_set(self, source_xml, tmp_path):
+        """Test that lmf_version can be controlled."""
+        from wn_edit import WordnetEditor
+        from wn import lmf
+        
+        editor = WordnetEditor.load_from_file(source_xml)
+        # The resource's lmf_version should be accessible
+        assert "lmf_version" in editor.resource
+        
+        # Modify it
+        editor.resource["lmf_version"] = "1.4"
+        
+        output_file = tmp_path / "output.xml"
+        editor.export(output_file)
+        
+        # Verify in exported file
+        resource = lmf.load(output_file)
+        assert resource["lmf_version"] == "1.4"
+
+
+@requires_wn  
+class TestWordnetEditorInitOverride:
+    """Tests for metadata override via __init__ parameters when loading from database.
+    
+    These tests verify that when loading an existing lexicon with lexicon_specifier,
+    the lexicon_id, label, version, and lmf_version parameters can override the
+    values from the loaded lexicon. This is useful for creating derivative works.
+    """
+    
+    @pytest.fixture
+    def installed_lexicon(self):
+        """Create and install a test lexicon in the wn database."""
+        import wn
+        from wn_edit import WordnetEditor
+        
+        # Create a unique lexicon ID to avoid conflicts
+        import uuid
+        unique_id = f"test-override-{uuid.uuid4().hex[:8]}"
+        
+        editor = WordnetEditor(
+            create_new=True,
+            lexicon_id=unique_id,
+            label="Original Label",
+            version="1.0",
+            email="test@example.com",
+            license="https://example.com/license",
+        )
+        
+        # Add some content
+        editor.create_synset(
+            pos="n",
+            definition="A test concept",
+            words=["testword"],
+        )
+        
+        # Commit to database (this uses wn.add_lexical_resource internally)
+        editor.commit()
+        
+        yield unique_id, "1.0"
+        
+        # Cleanup: remove from database
+        try:
+            wn.remove(f'{unique_id}:*')
+        except Exception:
+            pass
+    
+    def test_override_metadata_via_init_params(self, installed_lexicon, tmp_path):
+        """Test that metadata can be overridden via __init__ parameters."""
+        from wn_edit import WordnetEditor
+        from wn import lmf
+        
+        lex_id, version = installed_lexicon
+        specifier = f"{lex_id}:{version}"
+        
+        # Load with overrides
+        editor = WordnetEditor(
+            specifier,
+            lexicon_id=f"{lex_id}-derived",
+            label="Derived Label",
+            version="2.0",
+            lmf_version="1.4",
+        )
+        
+        # Verify overrides were applied
+        assert editor.lexicon["id"] == f"{lex_id}-derived"
+        assert editor.lexicon["label"] == "Derived Label"
+        assert editor.lexicon["version"] == "2.0"
+        assert editor.resource["lmf_version"] == "1.4"
+        
+        # Content should be preserved
+        assert editor.stats()["synsets"] == 1
+        assert editor.stats()["entries"] == 1
+        
+        # Export and verify
+        output_file = tmp_path / "derived.xml"
+        editor.export(output_file)
+        
+        resource = lmf.load(output_file)
+        lexicon = resource["lexicons"][0]
+        
+        assert lexicon["id"] == f"{lex_id}-derived"
+        assert lexicon["label"] == "Derived Label"
+        assert lexicon["version"] == "2.0"
+        assert resource["lmf_version"] == "1.4"
+    
+    def test_partial_override_via_init_params(self, installed_lexicon):
+        """Test that only specified parameters are overridden."""
+        from wn_edit import WordnetEditor
+        
+        lex_id, version = installed_lexicon
+        specifier = f"{lex_id}:{version}"
+        
+        # Load with only label override
+        editor = WordnetEditor(
+            specifier,
+            label="New Label Only",
+        )
+        
+        # Label should be overridden
+        assert editor.lexicon["label"] == "New Label Only"
+        # ID and version should be unchanged
+        assert editor.lexicon["id"] == lex_id
+        # Note: version default is "1.0" so it won't override unless different
+    
+    def test_no_override_when_no_params(self, installed_lexicon):
+        """Test that no override happens when no params are provided."""
+        from wn_edit import WordnetEditor
+        
+        lex_id, version = installed_lexicon
+        specifier = f"{lex_id}:{version}"
+        
+        # Load without overrides
+        editor = WordnetEditor(specifier)
+        
+        # All original values should be preserved
+        assert editor.lexicon["id"] == lex_id
+        assert editor.lexicon["label"] == "Original Label"
+        assert editor.lexicon["version"] == "1.0"
     """Integration tests for creating, exporting, loading, modifying, and re-exporting."""
     
     def test_create_dump_load_modify_dump(self, tmp_path):

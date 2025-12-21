@@ -474,13 +474,18 @@ class WordnetEditor:
         Args:
             lexicon_specifier: Specifier for existing lexicon (e.g., 'oewn:2024')
             create_new: If True, create a new empty lexicon
-            lexicon_id: ID for new lexicon (required if create_new=True)
-            label: Label for new lexicon
+            lexicon_id: ID for new lexicon (required if create_new=True),
+                        or override ID when loading existing lexicon
+            label: Label for new lexicon, or override when loading existing
             language: Language code (BCP-47)
             email: Contact email
             license: License URL
-            version: Version string
+            version: Version string (overrides existing if not '1.0')
             lmf_version: WN-LMF version (default: 1.4)
+        
+        When loading an existing lexicon (lexicon_specifier provided, create_new=False),
+        the lexicon_id, label, and version parameters can be used to override the
+        metadata from the loaded lexicon. This is useful for creating derivative works.
         """
         if not HAS_WN:
             raise ImportError(
@@ -503,6 +508,17 @@ class WordnetEditor:
             )
         elif lexicon_specifier:
             self._resource = self._load_from_database(lexicon_specifier)
+            # Apply any metadata overrides provided by the caller
+            if self._resource['lexicons']:
+                lex = self._resource['lexicons'][0]
+                if lexicon_id is not None:
+                    lex['id'] = lexicon_id
+                if label is not None:
+                    lex['label'] = label
+                if version != '1.0':  # Only override if not the default
+                    lex['version'] = version
+            # Always set lmf_version to ensure consistent output format
+            self._resource['lmf_version'] = lmf_version
         else:
             raise ValueError("Either lexicon_specifier or create_new must be provided")
         
@@ -617,6 +633,10 @@ class WordnetEditor:
     def set_version(self, version: str) -> None:
         """Set the lexicon version."""
         self._lexicon['version'] = version
+    
+    def set_id(self, lexicon_id: str) -> None:
+        """Set the lexicon ID."""
+        self._lexicon['id'] = lexicon_id
     
     def set_label(self, label: str) -> None:
         """Set the lexicon label."""
