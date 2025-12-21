@@ -553,11 +553,9 @@ class WordnetEditor:
         """
         Load a lexicon from the wn database into an editable LexicalResource.
         
-        This exports the lexicon to a temp file, then loads it with wn.lmf.load().
+        This builds the LexicalResource dictionary directly from wn objects
+        in memory, avoiding the overhead of file I/O.
         """
-        import tempfile
-        import os
-        
         # Get lexicons from database
         wordnet = wn.Wordnet(specifier)
         lexicons = wordnet.lexicons()
@@ -565,22 +563,118 @@ class WordnetEditor:
         if not lexicons:
             raise ValueError(f"No lexicons found for specifier: {specifier}")
         
-        # Export to temp file
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.xml', delete=False
-        ) as f:
-            temp_path = f.name
+        lex = lexicons[0]
         
-        try:
-            wn.export(lexicons, temp_path)
-            resource = lmf.load(temp_path)
-            return resource
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        # Build synsets list
+        synsets = []
+        for ss in wordnet.synsets():
+            synset_dict = {
+                'id': ss.id,
+                'partOfSpeech': ss.pos,
+                'ili': ss.ili.id if ss.ili else '',
+                'meta': ss.metadata() or None,
+            }
+            
+            # Add definitions
+            defs = ss.definitions()
+            if defs:
+                synset_dict['definitions'] = [
+                    {'text': d, 'meta': None} for d in defs
+                ]
+            
+            # Add examples  
+            examples = ss.examples()
+            if examples:
+                synset_dict['examples'] = [
+                    {'text': e, 'meta': None} for e in examples
+                ]
+            
+            # Add synset relations
+            rels = ss.relations()
+            if rels:
+                relations = [
+                    {'target': target.id, 'relType': rel_type, 'meta': None}
+                    for rel_type, targets in rels.items()
+                    for target in targets
+                ]
+                if relations:
+                    synset_dict['relations'] = relations
+            
+            synsets.append(synset_dict)
+        
+        # Build entries list - group senses by word
+        entries = []
+        for word in wordnet.words():
+            lemma = word.lemma()  # Cache the lemma call
+            entry_dict = {
+                'id': word.id,
+                'lemma': {
+                    'writtenForm': lemma,
+                    'partOfSpeech': word.pos,
+                },
+                'meta': word.metadata() or None,
+                'senses': [],
+            }
+            
+            # Add forms if any (excluding the base lemma)
+            forms = word.forms()
+            if forms:
+                other_forms = [{'writtenForm': f} for f in forms if f != lemma]
+                if other_forms:
+                    entry_dict['forms'] = other_forms
+            
+            # Add senses
+            for sense in word.senses():
+                sense_dict = {
+                    'id': sense.id,
+                    'synset': sense.synset().id,
+                    'meta': sense.metadata() or None,
+                }
+                
+                # Add sense relations
+                sense_rels = sense.relations()
+                if sense_rels:
+                    relations = [
+                        {'target': target.id, 'relType': rel_type, 'meta': None}
+                        for rel_type, targets in sense_rels.items()
+                        for target in targets
+                    ]
+                    if relations:
+                        sense_dict['relations'] = relations
+                
+                entry_dict['senses'].append(sense_dict)
+            
+            entries.append(entry_dict)
+        
+        # Build the lexicon dictionary
+        lexicon_dict = {
+            'id': lex.id,
+            'label': lex.label,
+            'language': lex.language,
+            'email': lex.email or 'unknown@example.com',
+            'license': lex.license,
+            'version': lex.version,
+            'entries': entries,
+            'synsets': synsets,
+            'meta': lex.metadata() or None,
+        }
+        
+        # Add optional fields
+        if lex.url:
+            lexicon_dict['url'] = lex.url
+        if lex.citation:
+            lexicon_dict['citation'] = lex.citation
+        
+        # Build the resource
+        resource = {
+            'lmf_version': DEFAULT_LMF_VERSION,
+            'lexicons': [lexicon_dict],
+        }
+        
+        return resource
     
     def _rebuild_indexes(self) -> None:
-        """Build indexes for fast lookup of entries and synsets.
+        """Build indexes for fast lookup of entries, synsets, and senses.
         
         Note: wn.lmf.load() may use 'entries' while we use 'entries'.
         This method handles both key names.
@@ -588,6 +682,7 @@ class WordnetEditor:
         self._entry_by_id: Dict[str, Dict] = {}
         self._synset_by_id: Dict[str, Dict] = {}
         self._entries_by_lemma: Dict[str, List[Dict]] = {}
+        self._sense_by_id: Dict[str, Dict] = {}
         
         if self._lexicon:
             # Handle both 'entries' (our format) and 'entries' (wn.lmf.load format)
@@ -599,6 +694,10 @@ class WordnetEditor:
                 if lemma_form not in self._entries_by_lemma:
                     self._entries_by_lemma[lemma_form] = []
                 self._entries_by_lemma[lemma_form].append(entry)
+                
+                # Index senses
+                for sense in entry.get('senses', []):
+                    self._sense_by_id[sense['id']] = sense
             
             for synset in self._lexicon.get('synsets', []):
                 self._synset_by_id[synset['id']] = synset
@@ -831,13 +930,28 @@ class WordnetEditor:
         ]
         del self._synset_by_id[synset_id]
         
-        # Remove senses pointing to this synset
+        # Remove senses pointing to this synset and update sense index
         for entry in self._lexicon['entries']:
-            entry['senses'] = [
-                s for s in entry.get('senses', []) if s['synset'] != synset_id
-            ]
+            old_senses = entry.get('senses', [])
+            new_senses = []
+            for s in old_senses:
+                if s['synset'] == synset_id:
+                    # Remove from sense index
+                    self._sense_by_id.pop(s['id'], None)
+                else:
+                    new_senses.append(s)
+            entry['senses'] = new_senses
         
-        # Remove entries that no longer have any senses
+        # Remove entries that no longer have any senses and update entry indexes
+        entries_to_remove = [e for e in self._lexicon['entries'] if not e.get('senses')]
+        for entry in entries_to_remove:
+            self._entry_by_id.pop(entry['id'], None)
+            lemma = entry['lemma']['writtenForm']
+            if lemma in self._entries_by_lemma:
+                self._entries_by_lemma[lemma] = [
+                    e for e in self._entries_by_lemma[lemma] if e['id'] != entry['id']
+                ]
+        
         self._lexicon['entries'] = [
             e for e in self._lexicon['entries'] if e.get('senses')
         ]
@@ -940,6 +1054,7 @@ class WordnetEditor:
             sense_id = f"{entry['id']}-{synset_id}"
             sense = make_sense(id=sense_id, synset=synset_id)
             entry['senses'].append(sense)
+            self._sense_by_id[sense_id] = sense  # Update index
         
         return entry
     
@@ -948,6 +1063,10 @@ class WordnetEditor:
         entry = self._entry_by_id.get(entry_id)
         if entry is None:
             raise KeyError(f"Entry not found: {entry_id}")
+        
+        # Remove senses from index
+        for sense in entry.get('senses', []):
+            self._sense_by_id.pop(sense['id'], None)
         
         self._lexicon['entries'] = [
             e for e in self._lexicon['entries'] if e['id'] != entry_id
@@ -975,18 +1094,16 @@ class WordnetEditor:
             rel_type: Relation type (e.g., 'antonym', 'derivation', 'pertainym')
             validate: If True (default), warn if rel_type is not a standard relation
         """
-        # Find the sense
-        for entry in self._lexicon['entries']:
-            for sense in entry.get('senses', []):
-                if sense['id'] == source_sense_id:
-                    if 'relations' not in sense:
-                        sense['relations'] = []
-                    sense['relations'].append(
-                        make_relation(target_id, rel_type, validate=validate, relation_kind='sense')
-                    )
-                    return
+        # Use index for O(1) lookup
+        sense = self._sense_by_id.get(source_sense_id)
+        if sense is None:
+            raise KeyError(f"Sense not found: {source_sense_id}")
         
-        raise KeyError(f"Sense not found: {source_sense_id}")
+        if 'relations' not in sense:
+            sense['relations'] = []
+        sense['relations'].append(
+            make_relation(target_id, rel_type, validate=validate, relation_kind='sense')
+        )
     
     # =========================================================================
     # Export and Commit
