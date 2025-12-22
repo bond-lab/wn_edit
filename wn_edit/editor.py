@@ -151,7 +151,6 @@ def make_lexicon(
 ) -> Dict:
     """Create a Lexicon dictionary.
     
-    Note: Uses 'entries' (not 'entries') to match wn.lmf structure.
     The 'meta' key is always included (defaults to None) because
     wn.add_lexical_resource() requires it to be present.
     """
@@ -465,8 +464,8 @@ class WordnetEditor:
         language: str = 'en',
         email: str = 'user@example.com',
         license: str = 'https://creativecommons.org/licenses/by/4.0/',
-        version: str = '1.0',
-        lmf_version: str = DEFAULT_LMF_VERSION,
+        version: Optional[str] = None,
+        lmf_version: Optional[str] = None,
     ):
         """
         Initialize the WordnetEditor.
@@ -480,12 +479,13 @@ class WordnetEditor:
             language: Language code (BCP-47)
             email: Contact email
             license: License URL
-            version: Version string (overrides existing if not '1.0')
-            lmf_version: WN-LMF version (default: 1.4)
+            version: Version string (default '1.0' for new, preserved for existing)
+            lmf_version: WN-LMF version (default 1.4 for new, preserved for existing)
         
         When loading an existing lexicon (lexicon_specifier provided, create_new=False),
-        the lexicon_id, label, and version parameters can be used to override the
-        metadata from the loaded lexicon. This is useful for creating derivative works.
+        the lexicon_id, label, version, and lmf_version parameters can be used to override
+        the metadata from the loaded lexicon. This is useful for creating derivative works.
+        If not specified, the original values are preserved.
         """
         if not HAS_WN:
             raise ImportError(
@@ -503,22 +503,23 @@ class WordnetEditor:
                 language=language,
                 email=email,
                 license=license,
-                version=version,
-                lmf_version=lmf_version,
+                version=version or '1.0',
+                lmf_version=lmf_version or DEFAULT_LMF_VERSION,
             )
         elif lexicon_specifier:
             self._resource = self._load_from_database(lexicon_specifier)
             # Apply any metadata overrides provided by the caller
+            # Only override if explicitly specified (not None)
             if self._resource['lexicons']:
                 lex = self._resource['lexicons'][0]
                 if lexicon_id is not None:
                     lex['id'] = lexicon_id
                 if label is not None:
                     lex['label'] = label
-                if version != '1.0':  # Only override if not the default
+                if version is not None:
                     lex['version'] = version
-            # Always set lmf_version to ensure consistent output format
-            self._resource['lmf_version'] = lmf_version
+            if lmf_version is not None:
+                self._resource['lmf_version'] = lmf_version
         else:
             raise ValueError("Either lexicon_specifier or create_new must be provided")
         
@@ -553,9 +554,12 @@ class WordnetEditor:
         """
         Load a lexicon from the wn database into an editable LexicalResource.
         
-        This builds the LexicalResource dictionary directly from wn objects
-        in memory, avoiding the overhead of file I/O.
+        This exports the lexicon to a temp file, then loads it with wn.lmf.load().
+        This ensures full compatibility with all wn.lmf data structures.
         """
+        import tempfile
+        import os
+        
         # Get lexicons from database
         wordnet = wn.Wordnet(specifier)
         lexicons = wordnet.lexicons()
@@ -563,132 +567,29 @@ class WordnetEditor:
         if not lexicons:
             raise ValueError(f"No lexicons found for specifier: {specifier}")
         
-        lex = lexicons[0]
+        # Export to temp file and reload - this ensures proper structure
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.xml', delete=False
+        ) as f:
+            temp_path = f.name
         
-        # Build synsets list
-        synsets = []
-        for ss in wordnet.synsets():
-            synset_dict = {
-                'id': ss.id,
-                'partOfSpeech': ss.pos,
-                'ili': ss.ili.id if ss.ili else '',
-                'meta': ss.metadata() or None,
-            }
-            
-            # Add definitions
-            defs = ss.definitions()
-            if defs:
-                synset_dict['definitions'] = [
-                    {'text': d, 'meta': None} for d in defs
-                ]
-            
-            # Add examples  
-            examples = ss.examples()
-            if examples:
-                synset_dict['examples'] = [
-                    {'text': e, 'meta': None} for e in examples
-                ]
-            
-            # Add synset relations
-            rels = ss.relations()
-            if rels:
-                relations = [
-                    {'target': target.id, 'relType': rel_type, 'meta': None}
-                    for rel_type, targets in rels.items()
-                    for target in targets
-                ]
-                if relations:
-                    synset_dict['relations'] = relations
-            
-            synsets.append(synset_dict)
-        
-        # Build entries list - group senses by word
-        entries = []
-        for word in wordnet.words():
-            lemma = word.lemma()  # Cache the lemma call
-            entry_dict = {
-                'id': word.id,
-                'lemma': {
-                    'writtenForm': lemma,
-                    'partOfSpeech': word.pos,
-                },
-                'meta': word.metadata() or None,
-                'senses': [],
-            }
-            
-            # Add forms if any (excluding the base lemma)
-            forms = word.forms()
-            if forms:
-                other_forms = [{'writtenForm': f} for f in forms if f != lemma]
-                if other_forms:
-                    entry_dict['forms'] = other_forms
-            
-            # Add senses
-            for sense in word.senses():
-                sense_dict = {
-                    'id': sense.id,
-                    'synset': sense.synset().id,
-                    'meta': sense.metadata() or None,
-                }
-                
-                # Add sense relations
-                sense_rels = sense.relations()
-                if sense_rels:
-                    relations = [
-                        {'target': target.id, 'relType': rel_type, 'meta': None}
-                        for rel_type, targets in sense_rels.items()
-                        for target in targets
-                    ]
-                    if relations:
-                        sense_dict['relations'] = relations
-                
-                entry_dict['senses'].append(sense_dict)
-            
-            entries.append(entry_dict)
-        
-        # Build the lexicon dictionary
-        lexicon_dict = {
-            'id': lex.id,
-            'label': lex.label,
-            'language': lex.language,
-            'email': lex.email or 'unknown@example.com',
-            'license': lex.license,
-            'version': lex.version,
-            'entries': entries,
-            'synsets': synsets,
-            'meta': lex.metadata() or None,
-        }
-        
-        # Add optional fields
-        if lex.url:
-            lexicon_dict['url'] = lex.url
-        if lex.citation:
-            lexicon_dict['citation'] = lex.citation
-        
-        # Build the resource
-        resource = {
-            'lmf_version': DEFAULT_LMF_VERSION,
-            'lexicons': [lexicon_dict],
-        }
-        
-        return resource
+        try:
+            wn.export(lexicons, temp_path)
+            resource = lmf.load(temp_path)
+            return resource
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
     
     def _rebuild_indexes(self) -> None:
-        """Build indexes for fast lookup of entries, synsets, and senses.
-        
-        Note: wn.lmf.load() may use 'entries' while we use 'entries'.
-        This method handles both key names.
-        """
+        """Build indexes for fast lookup of entries, synsets, and senses."""
         self._entry_by_id: Dict[str, Dict] = {}
         self._synset_by_id: Dict[str, Dict] = {}
         self._entries_by_lemma: Dict[str, List[Dict]] = {}
         self._sense_by_id: Dict[str, Dict] = {}
         
         if self._lexicon:
-            # Handle both 'entries' (our format) and 'entries' (wn.lmf.load format)
-            entries = self._lexicon.get('entries') or self._lexicon.get('entries', [])
-            
-            for entry in entries:
+            for entry in self._lexicon.get('entries', []):
                 self._entry_by_id[entry['id']] = entry
                 lemma_form = entry['lemma']['writtenForm']
                 if lemma_form not in self._entries_by_lemma:
@@ -1188,8 +1089,7 @@ class WordnetEditor:
     
     def stats(self) -> Dict[str, int]:
         """Get statistics about the lexicon."""
-        # Handle both 'entries' (our format) and 'entries' (wn.lmf.load format)
-        entries = self._lexicon.get('entries') or self._lexicon.get('entries', [])
+        entries = self._lexicon.get('entries', [])
         num_senses = sum(len(e.get('senses', [])) for e in entries)
         return {
             'synsets': len(self._lexicon.get('synsets', [])),

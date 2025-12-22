@@ -68,7 +68,15 @@ dependencies = [
 ]
 
 [tool.hatch.envs.default.scripts]
+# Default: fast tests only (respects addopts = -m 'not slow')
 test = "pytest {args:tests}"
+
+# Explicit variants
+test-fast = "pytest -m 'not slow' {args:tests}"
+test-slow = "pytest -m slow {args:tests}"
+test-all  = "pytest -m 'slow or not slow' {args:tests}"
+
+# Coverage
 test-cov = "pytest --cov=wn_edit --cov-report=term-missing {args:tests}"
 
 [tool.hatch.envs.mypy]

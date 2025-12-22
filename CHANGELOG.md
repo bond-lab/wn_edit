@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2025-12-22
+
+### Added
+
+- `set_id()` method to change the lexicon ID
+- Metadata override parameters when loading from database:
+  - `lexicon_id`, `label`, `version`, `lmf_version` can now be passed to `WordnetEditor()`
+    when loading an existing lexicon to create derivative works
+  - Parameters default to `None`, preserving original values unless explicitly set
+- Sense index (`_sense_by_id`) for O(1) sense lookups
+- New tests:
+  - `TestWordnetEditorMetadataOverride` - tests for metadata override via setter methods
+  - `TestWordnetEditorInitOverride` - tests for metadata override via `__init__` parameters
+  - `test_add_sense_relation_after_load_from_database` - regression test for ChainNet use case
+
+### Changed
+
+- **Performance**: `add_sense_relation()` now uses O(1) index lookup instead of O(n)
+  linear search through all entries and senses
+- `_rebuild_indexes()` now also builds the sense index
+- `add_word_to_synset()` now maintains the sense index
+- `remove_synset()` now properly maintains all indexes (entry, lemma, and sense)
+- `remove_entry()` now properly maintains the sense index
+
+### Fixed
+
+- Round-trip fidelity: loading and re-exporting a wordnet now preserves the original
+  `lmf_version` instead of always overwriting with 1.4
+- Test normalization now handles trailing whitespace in text content that may be
+  stripped by the wn.lmf load/dump cycle
+
+### Removed
+
+- Cleaned up obsolete comments referencing old key name alternatives
+
 ## [0.3.1] - 2025-12-16
 
 ### Added

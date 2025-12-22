@@ -37,12 +37,24 @@ def normalize_xml_for_comparison(xml_path: Path) -> list[str]:
     """Read and normalize XML for comparison.
     
     Returns a list of lines with consistent formatting.
+    Normalizes trailing whitespace in text content which may be
+    stripped by the wn.lmf load/dump cycle.
     """
+    import re
+    
     with open(xml_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
     
-    # Strip trailing whitespace and normalize
-    return [line.rstrip() for line in lines]
+    normalized = []
+    for line in lines:
+        # Strip trailing whitespace from the line itself
+        line = line.rstrip()
+        # Also normalize trailing whitespace before closing tags
+        # e.g., "Public interests </Example>" -> "Public interests</Example>"
+        line = re.sub(r'\s+(</(Example|Definition|ILIDefinition)>)', r'\1', line)
+        normalized.append(line)
+    
+    return normalized
 
 
 def find_xml_differences(original_lines: list[str], modified_lines: list[str]) -> list[tuple[int, str, str]]:

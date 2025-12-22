@@ -904,7 +904,77 @@ class TestWordnetEditorInitOverride:
         assert editor.lexicon["id"] == lex_id
         assert editor.lexicon["label"] == "Original Label"
         assert editor.lexicon["version"] == "1.0"
-    """Integration tests for creating, exporting, loading, modifying, and re-exporting."""
+    
+    def test_add_sense_relation_after_load_from_database(self, installed_lexicon, tmp_path):
+        """Test that sense relations can be added after loading from database.
+        
+        This is a regression test for the ChainNet enhance.py use case where
+        we load a wordnet from the database and add metaphor/metonym relations.
+        """
+        from wn_edit import WordnetEditor
+        from wn import lmf
+        import wn
+        
+        lex_id, version = installed_lexicon
+        specifier = f"{lex_id}:{version}"
+        
+        # Load the lexicon from database
+        editor = WordnetEditor(specifier)
+        
+        # Verify senses are indexed
+        assert len(editor._sense_by_id) > 0, "Sense index should not be empty"
+        
+        # Get a sense ID from the index
+        sense_ids = list(editor._sense_by_id.keys())
+        assert len(sense_ids) >= 1, "Should have at least one sense"
+        source_sense_id = sense_ids[0]
+        
+        # Also verify we can look up senses via the wn API and they match
+        my_wn = wn.Wordnet(specifier)
+        wn_senses = list(my_wn.senses())
+        assert len(wn_senses) >= 1, "Should have senses in wn"
+        
+        # The sense ID from wn should be in our index
+        wn_sense_id = wn_senses[0].id
+        assert wn_sense_id in editor._sense_by_id, (
+            f"wn sense ID '{wn_sense_id}' should be in editor's sense index. "
+            f"Index has: {list(editor._sense_by_id.keys())[:5]}..."
+        )
+        
+        # Now add a sense relation (using the sense as both source and target for simplicity)
+        editor.add_sense_relation(source_sense_id, source_sense_id, 'similar', validate=False)
+        
+        # Verify the relation was added
+        sense = editor._sense_by_id[source_sense_id]
+        assert 'relations' in sense, "Sense should have relations after adding one"
+        assert len(sense['relations']) == 1, "Should have exactly one relation"
+        assert sense['relations'][0]['relType'] == 'similar'
+        assert sense['relations'][0]['target'] == source_sense_id
+        
+        # Export and verify the relation persists
+        output_file = tmp_path / "with_relation.xml"
+        editor.export(output_file)
+        
+        # Load and check
+        resource = lmf.load(output_file)
+        lexicon = resource["lexicons"][0]
+        
+        # Find the sense with the relation
+        found_relation = False
+        for entry in lexicon["entries"]:
+            for sense in entry.get("senses", []):
+                if sense["id"] == source_sense_id:
+                    if "relations" in sense:
+                        for rel in sense["relations"]:
+                            if rel["relType"] == "similar":
+                                found_relation = True
+                                break
+        
+        assert found_relation, "Relation should be present in exported XML"
+
+
+@requires_wn
+class TestWordnetEditorRoundTrip:
     
     def test_create_dump_load_modify_dump(self, tmp_path):
         """Test full round-trip: create -> dump -> load -> modify -> dump."""
