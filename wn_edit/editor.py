@@ -576,6 +576,14 @@ class WordnetEditor:
         try:
             wn.export(lexicons, temp_path)
             resource = lmf.load(temp_path)
+            
+            # Sanitize: ensure 'ili' fields are strings, not None
+            # (wn.lmf.dump() cannot serialize None values in attributes)
+            for lexicon in resource.get('lexicons', []):
+                for synset in lexicon.get('synsets', []):
+                    if synset.get('ili') is None:
+                        synset['ili'] = ''
+            
             return resource
         finally:
             if os.path.exists(temp_path):
