@@ -796,37 +796,49 @@ class TestWordnetEditorInitOverride:
     """
     
     @pytest.fixture
-    def installed_lexicon(self):
-        """Create and install a test lexicon in the wn database."""
+    def installed_lexicon(self, tmp_path):
+        """Create and install a test lexicon with lexfile and count data."""
         import wn
-        from wn_edit import WordnetEditor
-        
-        # Create a unique lexicon ID to avoid conflicts
         import uuid
+
         unique_id = f"test-override-{uuid.uuid4().hex[:8]}"
-        
-        editor = WordnetEditor(
-            create_new=True,
-            lexicon_id=unique_id,
-            label="Original Label",
-            version="1.0",
-            email="test@example.com",
-            license="https://example.com/license",
-        )
-        
-        # Add some content
-        editor.create_synset(
-            pos="n",
-            definition="A test concept",
-            words=["testword"],
-        )
-        
-        # Commit to database (this uses wn.add_lexical_resource internally)
-        editor.commit()
-        
+
+        xml_content = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE LexicalResource SYSTEM "http://globalwordnet.github.io/schemas/WN-LMF-1.1.dtd">
+<LexicalResource xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <Lexicon id="{unique_id}"
+           label="Original Label"
+           language="en"
+           email="test@example.com"
+           license="https://example.com/license"
+           version="1.0">
+    <LexicalEntry id="{unique_id}-testword-entry">
+      <Lemma writtenForm="testword" partOfSpeech="n" />
+      <Sense id="{unique_id}-testword-sense-1" synset="{unique_id}-ss-1">
+        <Count>42</Count>
+      </Sense>
+      <Sense id="{unique_id}-testword-sense-2" synset="{unique_id}-ss-2">
+        <Count>7</Count>
+      </Sense>
+    </LexicalEntry>
+    <Synset id="{unique_id}-ss-1" ili="" partOfSpeech="n"
+            lexfile="noun.animal">
+      <Definition>A test concept</Definition>
+    </Synset>
+    <Synset id="{unique_id}-ss-2" ili="" partOfSpeech="n"
+            lexfile="noun.food">
+      <Definition>Another test concept</Definition>
+    </Synset>
+  </Lexicon>
+</LexicalResource>"""
+
+        xml_path = tmp_path / "installed_lexicon.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+        wn.add(xml_path)
+
         yield unique_id, "1.0"
-        
-        # Cleanup: remove from database
+
         try:
             wn.remove(f'{unique_id}:*')
         except Exception:
@@ -854,11 +866,11 @@ class TestWordnetEditorInitOverride:
         assert editor.lexicon["label"] == "Derived Label"
         assert editor.lexicon["version"] == "2.0"
         assert editor.resource["lmf_version"] == "1.4"
-        
+
         # Content should be preserved
-        assert editor.stats()["synsets"] == 1
+        assert editor.stats()["synsets"] == 2
         assert editor.stats()["entries"] == 1
-        
+
         # Export and verify
         output_file = tmp_path / "derived.xml"
         editor.export(output_file)
@@ -907,70 +919,78 @@ class TestWordnetEditorInitOverride:
     
     def test_add_sense_relation_after_load_from_database(self, installed_lexicon, tmp_path):
         """Test that sense relations can be added after loading from database.
-        
+
         This is a regression test for the ChainNet enhance.py use case where
         we load a wordnet from the database and add metaphor/metonym relations.
+        Also verifies that lexfile and count survive the round-trip (issue #1).
         """
         from wn_edit import WordnetEditor
-        from wn import lmf
+        import xml.etree.ElementTree as ET
         import wn
-        
+
         lex_id, version = installed_lexicon
         specifier = f"{lex_id}:{version}"
-        
+
         # Load the lexicon from database
-        editor = WordnetEditor(specifier)
-        
+        editor = WordnetEditor(specifier, lmf_version="1.1")
+
         # Verify senses are indexed
-        assert len(editor._sense_by_id) > 0, "Sense index should not be empty"
-        
-        # Get a sense ID from the index
-        sense_ids = list(editor._sense_by_id.keys())
-        assert len(sense_ids) >= 1, "Should have at least one sense"
-        source_sense_id = sense_ids[0]
-        
+        source_id = f"{lex_id}-testword-sense-1"
+        target_id = f"{lex_id}-testword-sense-2"
+        assert source_id in editor._sense_by_id
+        assert target_id in editor._sense_by_id
+
         # Also verify we can look up senses via the wn API and they match
         my_wn = wn.Wordnet(specifier)
         wn_senses = list(my_wn.senses())
-        assert len(wn_senses) >= 1, "Should have senses in wn"
-        
-        # The sense ID from wn should be in our index
-        wn_sense_id = wn_senses[0].id
-        assert wn_sense_id in editor._sense_by_id, (
-            f"wn sense ID '{wn_sense_id}' should be in editor's sense index. "
-            f"Index has: {list(editor._sense_by_id.keys())[:5]}..."
-        )
-        
-        # Now add a sense relation (using the sense as both source and target for simplicity)
-        editor.add_sense_relation(source_sense_id, source_sense_id, 'similar', validate=False)
-        
-        # Verify the relation was added
-        sense = editor._sense_by_id[source_sense_id]
-        assert 'relations' in sense, "Sense should have relations after adding one"
-        assert len(sense['relations']) == 1, "Should have exactly one relation"
+        assert len(wn_senses) == 2, "Should have two senses in wn"
+
+        wn_sense_ids = {s.id for s in wn_senses}
+        assert source_id in wn_sense_ids
+        assert target_id in wn_sense_ids
+
+        # Add a sense relation
+        editor.add_sense_relation(source_id, target_id, 'similar', validate=False)
+
+        # Verify the relation was added in memory
+        sense = editor._sense_by_id[source_id]
+        assert len(sense['relations']) == 1
         assert sense['relations'][0]['relType'] == 'similar'
-        assert sense['relations'][0]['target'] == source_sense_id
-        
-        # Export and verify the relation persists
+        assert sense['relations'][0]['target'] == target_id
+
+        # Export and verify everything persists in the XML
         output_file = tmp_path / "with_relation.xml"
         editor.export(output_file)
-        
-        # Load and check
-        resource = lmf.load(output_file)
-        lexicon = resource["lexicons"][0]
-        
-        # Find the sense with the relation
+
+        tree = ET.parse(output_file)
+        root = tree.getroot()
+
+        # Check the relation is in the exported XML
         found_relation = False
-        for entry in lexicon["entries"]:
-            for sense in entry.get("senses", []):
-                if sense["id"] == source_sense_id:
-                    if "relations" in sense:
-                        for rel in sense["relations"]:
-                            if rel["relType"] == "similar":
-                                found_relation = True
-                                break
-        
+        for sense_elem in root.iter("Sense"):
+            if sense_elem.get("id") == source_id:
+                for rel in sense_elem.findall("SenseRelation"):
+                    if rel.get("relType") == "similar":
+                        found_relation = True
         assert found_relation, "Relation should be present in exported XML"
+
+        # Check lexfile is preserved on synsets (issue #1)
+        synsets = {s.get("id"): s for s in root.iter("Synset")}
+        assert synsets[f"{lex_id}-ss-1"].get("lexfile") == "noun.animal", \
+            "lexfile should be preserved after adding a sense relation"
+        assert synsets[f"{lex_id}-ss-2"].get("lexfile") == "noun.food", \
+            "lexfile should be preserved after adding a sense relation"
+
+        # Check counts are preserved on senses (issue #1)
+        sense_counts = {}
+        for sense_elem in root.iter("Sense"):
+            count_elem = sense_elem.find("Count")
+            if count_elem is not None:
+                sense_counts[sense_elem.get("id")] = count_elem.text
+        assert sense_counts.get(source_id) == "42", \
+            "count should be preserved after adding a sense relation"
+        assert sense_counts.get(target_id) == "7", \
+            "count should be preserved after adding a sense relation"
 
 
 @requires_wn

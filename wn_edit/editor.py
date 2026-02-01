@@ -574,7 +574,7 @@ class WordnetEditor:
             temp_path = f.name
         
         try:
-            wn.export(lexicons, temp_path)
+            wn.export(lexicons, temp_path, version='1.1')
             resource = lmf.load(temp_path)
             
             # Sanitize: ensure 'ili' fields are strings, not None
