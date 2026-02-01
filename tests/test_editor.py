@@ -932,7 +932,9 @@ class TestWordnetEditorInitOverride:
         specifier = f"{lex_id}:{version}"
 
         # Load the lexicon from database
-        editor = WordnetEditor(specifier, lmf_version="1.1")
+        # Note: the original XML used LMF 1.1, but the wn database does not
+        # preserve the LMF version; the editor uses wn.export()'s default (1.4).
+        editor = WordnetEditor(specifier)
 
         # Verify senses are indexed
         source_id = f"{lex_id}-testword-sense-1"

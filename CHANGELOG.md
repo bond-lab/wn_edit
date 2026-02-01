@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `_load_from_database()` now uses `wn.export()`'s default LMF version (currently
+  1.4) instead of hardcoding 1.1. The wn database does not preserve the original
+  LMF version of imported data; use the `lmf_version` parameter in `__init__` to
+  override if a specific version is needed.
+- Minimum `wn` dependency bumped from 0.9.0 to 1.0.0 (required for LMF 1.4
+  export support).
+
+### Fixed
+
+- Round-trip fidelity tests now pass: removing the hardcoded LMF 1.1 version
+  eliminates DOCTYPE mismatches between original and editor exports.
+- ILI integration tests updated for `wn>=1.0` API where `synset.ili` returns
+  a `str` directly instead of an object with an `.id` attribute.
+- All tests now use a local `.wn_data/` directory (via shared `conftest.py`)
+  instead of the global `~/.wn_data`, avoiding issues with corrupted or
+  incompatible cached downloads.
+
 ## [0.3.2] - 2025-12-22
 
 ### Added

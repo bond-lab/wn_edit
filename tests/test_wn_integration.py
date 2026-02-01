@@ -228,10 +228,10 @@ class TestWnIntegration:
         
         ss = synsets[0]
         
-        # Check the ILI is accessible (ili is a property, not a method)
+        # Check the ILI is accessible (ili is a property returning str in wn>=1.0)
         ili = ss.ili
         assert ili is not None
-        assert ili.id == 'i99999999'
+        assert ili == 'i99999999'
     
     def test_commit_with_examples(self):
         """Test that examples are preserved after commit."""
@@ -411,8 +411,8 @@ class TestILIIntegration:
         
         my_wn = wn.Wordnet(lex_id)
         ss = my_wn.synsets('testili1unique')[0]
-        # ili is a property, not a method
-        assert ss.ili.id == 'i12345678'
+        # ili is a property returning str in wn>=1.0
+        assert ss.ili == 'i12345678'
     
     def test_empty_ili(self):
         """Test synset without ILI."""

@@ -553,28 +553,33 @@ class WordnetEditor:
     def _load_from_database(self, specifier: str) -> Dict:
         """
         Load a lexicon from the wn database into an editable LexicalResource.
-        
+
         This exports the lexicon to a temp file, then loads it with wn.lmf.load().
         This ensures full compatibility with all wn.lmf data structures.
+
+        Note: The wn database does not preserve the original LMF version of
+        the imported data. The exported resource will use the wn.export()
+        default LMF version (currently 1.4). Use the lmf_version parameter
+        in __init__ to override if a specific version is needed.
         """
         import tempfile
         import os
-        
+
         # Get lexicons from database
         wordnet = wn.Wordnet(specifier)
         lexicons = wordnet.lexicons()
-        
+
         if not lexicons:
             raise ValueError(f"No lexicons found for specifier: {specifier}")
-        
+
         # Export to temp file and reload - this ensures proper structure
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.xml', delete=False
         ) as f:
             temp_path = f.name
-        
+
         try:
-            wn.export(lexicons, temp_path, version='1.1')
+            wn.export(lexicons, temp_path)
             resource = lmf.load(temp_path)
             
             # Sanitize: ensure 'ili' fields are strings, not None

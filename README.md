@@ -16,7 +16,7 @@
 pip install wn_edit
 ```
 
-**Requirements:** Python 3.10+ and [wn](https://pypi.org/project/wn/) 0.9.0+
+**Requirements:** Python 3.10+ and [wn](https://pypi.org/project/wn/) 1.0.0+
 
 ## Quick Start
 
