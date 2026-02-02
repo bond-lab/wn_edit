@@ -28,8 +28,10 @@ from wn_edit.editor import (
     make_form,
     validate_pos,
     validate_count,
+    validate_adjposition,
     WordnetEditor,
     PARTS_OF_SPEECH,
+    ADJPOSITIONS,
     HAS_WN,
 )
 
@@ -43,7 +45,7 @@ class TestValidation:
     def test_validate_pos_valid(self):
         """Test that valid POS values pass validation."""
         for pos in ['n', 'v', 'a', 'r', 's']:
-            validate_pos(pos)  # Should not raise
+            validate_pos(pos)
     
     def test_validate_pos_invalid(self):
         """Test that invalid POS values raise ValueError."""
@@ -78,14 +80,21 @@ class TestValidation:
     
     def test_parts_of_speech_constant(self):
         """Test PARTS_OF_SPEECH contains expected values."""
-        # These are the standard WordNet POS tags that should always be present
-        assert 'n' in PARTS_OF_SPEECH  # noun
-        assert 'v' in PARTS_OF_SPEECH  # verb
-        assert 'a' in PARTS_OF_SPEECH  # adjective
-        assert 'r' in PARTS_OF_SPEECH  # adverb
-        # 's' (satellite adjective) may or may not be present depending on wn version
-        # Just verify we have at least the core 4
+        for pos in ['n', 'v', 'a', 'r']:
+            assert pos in PARTS_OF_SPEECH
         assert len(PARTS_OF_SPEECH) >= 4
+
+    def test_validate_adjposition_valid(self):
+        """Test that valid adjposition values pass validation."""
+        for adj in ['a', 'p', 'ip']:
+            validate_adjposition(adj)
+
+    def test_validate_adjposition_invalid(self):
+        """Test that invalid adjposition values raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_adjposition('x')
+        assert "Invalid adjective position: 'x'" in str(exc_info.value)
+        assert "Must be one of:" in str(exc_info.value)
 
 
 class TestHelperFunctions:
@@ -153,6 +162,27 @@ class TestHelperFunctions:
         assert len(s["relations"]) == 1
         assert s["relations"][0]["relType"] == "antonym"
     
+    def test_make_sense_with_adjposition(self):
+        """Test creating a sense with adjposition."""
+        s = make_sense("sense-003", "synset-003", adjposition='p')
+        assert s["adjposition"] == "p"
+
+    def test_make_sense_invalid_adjposition(self):
+        """Test that make_sense rejects invalid adjposition."""
+        with pytest.raises(ValueError):
+            make_sense("sense-004", "synset-004", adjposition='x')
+
+    def test_make_sense_with_subcat(self):
+        """Test creating a sense with subcat frames."""
+        s = make_sense("sense-005", "synset-005", subcat=['frame1'])
+        assert s["subcat"] == ['frame1']
+
+    def test_make_synset_with_ili_definition(self):
+        """Test creating a synset with ili_definition."""
+        ili_def = {"text": "A concept in ILI", "meta": None}
+        ss = make_synset("synset-010", "n", ili_definition=ili_def)
+        assert ss["ili_definition"] == ili_def
+
     def test_make_synset(self):
         """Test creating a synset dict."""
         ss = make_synset("synset-001", "n")
@@ -259,8 +289,6 @@ class TestWordnetEditorCreate:
     
     def test_create_new_editor(self):
         """Test creating a new empty lexicon."""
-        from wn_edit import WordnetEditor
-        
         editor = WordnetEditor(
             create_new=True,
             lexicon_id="test-wn",
@@ -274,17 +302,39 @@ class TestWordnetEditorCreate:
     
     def test_create_new_requires_id(self):
         """Test that create_new=True requires lexicon_id."""
-        from wn_edit import WordnetEditor
-        
         with pytest.raises(ValueError, match="lexicon_id is required"):
             WordnetEditor(create_new=True)
     
     def test_must_specify_something(self):
         """Test that either lexicon_specifier or create_new must be provided."""
-        from wn_edit import WordnetEditor
-        
         with pytest.raises(ValueError):
             WordnetEditor()
+
+    def test_stats(self):
+        """Test getting statistics."""
+        editor = WordnetEditor(
+            create_new=True,
+            lexicon_id="test-wn",
+            label="Test WordNet",
+        )
+
+        # Empty initially
+        stats = editor.stats()
+        assert stats["synsets"] == 0
+        assert stats["entries"] == 0
+        assert stats["senses"] == 0
+
+        # Add content
+        editor.create_synset(
+            pos="n",
+            definition="Test",
+            words=["word1", "word2"],
+        )
+
+        stats = editor.stats()
+        assert stats["synsets"] == 1
+        assert stats["entries"] == 2
+        assert stats["senses"] == 2
 
 
 @requires_wn
@@ -294,7 +344,6 @@ class TestWordnetEditorSynsets:
     @pytest.fixture
     def editor(self):
         """Create a fresh editor for each test."""
-        from wn_edit import WordnetEditor
         return WordnetEditor(
             create_new=True,
             lexicon_id="test-wn",
@@ -379,6 +428,16 @@ class TestWordnetEditorSynsets:
             for sense in entry.get("senses", []):
                 assert sense["synset"] != synset_id
     
+    def test_create_synset_custom_id(self, editor):
+        """Test creating a synset with a custom ID."""
+        synset = editor.create_synset(
+            pos="n",
+            definition="Custom ID test",
+            synset_id="my-custom-ss",
+        )
+        assert synset["id"] == "my-custom-ss"
+        assert editor.get_synset("my-custom-ss") is synset
+
     def test_add_synset_relation(self, editor):
         """Test adding a relation between synsets."""
         synset1 = editor.create_synset(pos="n", definition="Animal")
@@ -398,7 +457,6 @@ class TestWordnetEditorEntries:
     @pytest.fixture
     def editor(self):
         """Create a fresh editor for each test."""
-        from wn_edit import WordnetEditor
         return WordnetEditor(
             create_new=True,
             lexicon_id="test-wn",
@@ -457,6 +515,12 @@ class TestWordnetEditorEntries:
         entry = editor.find_entries("dog", "n")[0]
         assert len(entry["senses"]) == 2
     
+    def test_create_entry_custom_id(self, editor):
+        """Test creating an entry with a custom ID."""
+        entry = editor.create_entry("dog", "n", entry_id="my-custom-entry")
+        assert entry["id"] == "my-custom-entry"
+        assert editor.get_entry("my-custom-entry") is entry
+
     def test_remove_entry(self, editor):
         """Test removing an entry."""
         entry = editor.create_entry("dog", "n")
@@ -475,7 +539,6 @@ class TestWordnetEditorExport:
     @pytest.fixture
     def editor(self):
         """Create an editor with some content."""
-        from wn_edit import WordnetEditor
         editor = WordnetEditor(
             create_new=True,
             lexicon_id="test-wn",
@@ -535,46 +598,12 @@ class TestWordnetEditorExport:
 
 
 @requires_wn
-class TestWordnetEditorStats:
-    """Tests for statistics methods."""
-    
-    def test_stats(self):
-        """Test getting statistics."""
-        from wn_edit import WordnetEditor
-        
-        editor = WordnetEditor(
-            create_new=True,
-            lexicon_id="test-wn",
-            label="Test WordNet",
-        )
-        
-        # Empty initially
-        stats = editor.stats()
-        assert stats["synsets"] == 0
-        assert stats["entries"] == 0
-        assert stats["senses"] == 0
-        
-        # Add content
-        editor.create_synset(
-            pos="n",
-            definition="Test",
-            words=["word1", "word2"],
-        )
-        
-        stats = editor.stats()
-        assert stats["synsets"] == 1
-        assert stats["entries"] == 2
-        assert stats["senses"] == 2
-
-
-@requires_wn
 class TestWordnetEditorMetadata:
     """Tests for lexicon metadata operations."""
     
     @pytest.fixture
     def editor(self):
         """Create a fresh editor for each test."""
-        from wn_edit import WordnetEditor
         return WordnetEditor(
             create_new=True,
             lexicon_id="test-wn",
@@ -642,6 +671,31 @@ class TestWordnetEditorMetadata:
         assert lexicon["version"] == "2.0"
         assert lexicon["label"] == "Exported WordNet"
 
+    def test_set_id(self, editor):
+        """Test setting lexicon ID."""
+        editor.set_id("new-id")
+        assert editor.get_metadata()["id"] == "new-id"
+
+    def test_set_email(self, editor):
+        """Test setting email."""
+        editor.set_email("new@example.com")
+        assert editor.get_metadata()["email"] == "new@example.com"
+
+    def test_set_license(self, editor):
+        """Test setting license."""
+        editor.set_license("https://example.com/new-license")
+        assert editor.get_metadata()["license"] == "https://example.com/new-license"
+
+    def test_set_url(self, editor):
+        """Test setting url."""
+        editor.set_url("https://example.com/wordnet")
+        assert editor.get_metadata()["url"] == "https://example.com/wordnet"
+
+    def test_set_citation(self, editor):
+        """Test setting citation."""
+        editor.set_citation("Cite this work as...")
+        assert editor.get_metadata()["citation"] == "Cite this work as..."
+
 
 @requires_wn
 class TestWordnetEditorMetadataOverride:
@@ -650,8 +704,6 @@ class TestWordnetEditorMetadataOverride:
     @pytest.fixture
     def source_xml(self, tmp_path):
         """Create a source XML file to load from."""
-        from wn_edit import WordnetEditor
-        
         editor = WordnetEditor(
             create_new=True,
             lexicon_id="source-wn",
@@ -672,49 +724,28 @@ class TestWordnetEditorMetadataOverride:
         editor.export(output_file)
         return output_file
     
-    def test_override_lexicon_id_on_load(self, source_xml):
-        """Test that lexicon_id can be overridden when loading."""
-        from wn_edit import WordnetEditor
-        
+    def test_override_individual_fields_on_load(self, source_xml):
+        """Test that individual setters override without clobbering other fields."""
+        # set_id
         editor = WordnetEditor.load_from_file(source_xml)
-        
-        # Original ID
         assert editor.lexicon["id"] == "source-wn"
-        
-        # Now load with override - need to use set_id after loading
-        editor2 = WordnetEditor.load_from_file(source_xml)
-        editor2.set_id("derived-wn")
-        
-        assert editor2.lexicon["id"] == "derived-wn"
-        # Other metadata should be unchanged
-        assert editor2.lexicon["label"] == "Source WordNet"
-        assert editor2.lexicon["version"] == "1.0"
-    
-    def test_override_version_on_load(self, source_xml):
-        """Test that version can be overridden when loading."""
-        from wn_edit import WordnetEditor
-        
+        editor.set_id("derived-wn")
+        assert editor.lexicon["id"] == "derived-wn"
+        assert editor.lexicon["label"] == "Source WordNet"  # unchanged
+
+        # set_version
         editor = WordnetEditor.load_from_file(source_xml)
         editor.set_version("2.0-derived")
-        
         assert editor.lexicon["version"] == "2.0-derived"
-        # Other metadata should be unchanged
-        assert editor.lexicon["id"] == "source-wn"
-        assert editor.lexicon["label"] == "Source WordNet"
-    
-    def test_override_label_on_load(self, source_xml):
-        """Test that label can be overridden when loading."""
-        from wn_edit import WordnetEditor
-        
+        assert editor.lexicon["id"] == "source-wn"  # unchanged
+
+        # set_label
         editor = WordnetEditor.load_from_file(source_xml)
         editor.set_label("Derived WordNet with Extensions")
-        
         assert editor.lexicon["label"] == "Derived WordNet with Extensions"
-    
+
     def test_override_multiple_metadata_on_load(self, source_xml):
         """Test overriding multiple metadata fields when loading."""
-        from wn_edit import WordnetEditor
-        
         editor = WordnetEditor.load_from_file(source_xml)
         editor.set_id("derived-wn")
         editor.set_version("2.0")
@@ -729,7 +760,6 @@ class TestWordnetEditorMetadataOverride:
     
     def test_override_metadata_persists_in_export(self, source_xml, tmp_path):
         """Test that overridden metadata is preserved when exporting."""
-        from wn_edit import WordnetEditor
         from wn import lmf
         
         editor = WordnetEditor.load_from_file(source_xml)
@@ -751,25 +781,8 @@ class TestWordnetEditorMetadataOverride:
         assert len(lexicon["synsets"]) == 1
         assert len(lexicon["entries"]) == 1
     
-    def test_set_id_method(self):
-        """Test the set_id method works correctly."""
-        from wn_edit import WordnetEditor
-        
-        editor = WordnetEditor(
-            create_new=True,
-            lexicon_id="original-id",
-            label="Test WordNet",
-        )
-        
-        assert editor.lexicon["id"] == "original-id"
-        
-        editor.set_id("new-id")
-        
-        assert editor.lexicon["id"] == "new-id"
-    
     def test_lmf_version_can_be_set(self, source_xml, tmp_path):
         """Test that lmf_version can be controlled."""
-        from wn_edit import WordnetEditor
         from wn import lmf
         
         editor = WordnetEditor.load_from_file(source_xml)
@@ -847,7 +860,6 @@ class TestWordnetEditorInitOverride:
     
     def test_override_metadata_via_init_params(self, installed_lexicon, tmp_path):
         """Test that metadata can be overridden via __init__ parameters."""
-        from wn_edit import WordnetEditor
         from wn import lmf
         
         lex_id, version = installed_lexicon
@@ -886,8 +898,6 @@ class TestWordnetEditorInitOverride:
     
     def test_partial_override_via_init_params(self, installed_lexicon):
         """Test that only specified parameters are overridden."""
-        from wn_edit import WordnetEditor
-        
         lex_id, version = installed_lexicon
         specifier = f"{lex_id}:{version}"
         
@@ -905,8 +915,6 @@ class TestWordnetEditorInitOverride:
     
     def test_no_override_when_no_params(self, installed_lexicon):
         """Test that no override happens when no params are provided."""
-        from wn_edit import WordnetEditor
-        
         lex_id, version = installed_lexicon
         specifier = f"{lex_id}:{version}"
         
@@ -925,7 +933,6 @@ class TestWordnetEditorInitOverride:
         we load a wordnet from the database and add metaphor/metonym relations.
         Also verifies that lexfile and count survive the round-trip (issue #1).
         """
-        from wn_edit import WordnetEditor
         import xml.etree.ElementTree as ET
         import wn
 
@@ -1001,7 +1008,6 @@ class TestWordnetEditorRoundTrip:
     
     def test_create_dump_load_modify_dump(self, tmp_path):
         """Test full round-trip: create -> dump -> load -> modify -> dump."""
-        from wn_edit import WordnetEditor
         from wn import lmf
         import xml.etree.ElementTree as ET
         
@@ -1169,9 +1175,13 @@ class TestWordnetEditorRoundTrip:
         assert len(resource2["lexicons"][0]["entries"]) == 12
         assert resource2["lexicons"][0]["version"] == "1.1"
     
+    def test_load_from_file_not_found(self):
+        """Test that loading a non-existent file raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            WordnetEditor.load_from_file("/nonexistent/path/to/file.xml")
+
     def test_load_from_file_classmethod(self, tmp_path):
         """Test the load_from_file class method for clean round-trip editing."""
-        from wn_edit import WordnetEditor
         from wn import lmf
         
         # Step 1: Create a new wordnet
