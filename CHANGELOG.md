@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Performance**: `_load_from_database()` now uses bulk SQL queries (~20 total)
+  instead of an XML roundtrip, reducing OEWN load time from ~140s to ~10s.
+  Falls back to the XML roundtrip automatically if the wn schema changes.
 - `_load_from_database()` now uses `wn.export()`'s default LMF version (currently
   1.4) instead of hardcoding 1.1. The wn database does not preserve the original
   LMF version of imported data; use the `lmf_version` parameter in `__init__` to
