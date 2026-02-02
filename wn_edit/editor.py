@@ -554,41 +554,444 @@ class WordnetEditor:
         """
         Load a lexicon from the wn database into an editable LexicalResource.
 
-        This exports the lexicon to a temp file, then loads it with wn.lmf.load().
-        This ensures full compatibility with all wn.lmf data structures.
+        Tries bulk SQL first (~20 queries), falls back to XML roundtrip
+        if the wn schema has changed.
+        """
+        import sqlite3
+        try:
+            return self._load_from_database_bulk(specifier)
+        except (ImportError, AttributeError, sqlite3.OperationalError):
+            return self._load_from_database_xml(specifier)
 
-        Note: The wn database does not preserve the original LMF version of
-        the imported data. The exported resource will use the wn.export()
-        default LMF version (currently 1.4). Use the lmf_version parameter
-        in __init__ to override if a specific version is needed.
+    def _load_from_database_bulk(self, specifier: str) -> Dict:
+        """
+        Fastest path: build LexicalResource via ~20 bulk SQL queries.
+
+        Reads the wn SQLite database directly, fetching all rows per table
+        in single queries and assembling the LMF dict in Python. This avoids
+        the ~3.6M per-entity queries that _LMFExporter makes for OEWN.
+
+        Falls back (via the dispatcher) if wn's DB schema changes.
+        """
+        from collections import defaultdict
+        from wn._db import connect
+
+        conn = connect()
+        version = DEFAULT_LMF_VERSION
+
+        # -- Step 1: lexicon metadata ------------------------------------------
+
+        lex_row = conn.execute(
+            "SELECT rowid, id, label, language, email, license, version,"
+            "       url, citation, logo, metadata"
+            "  FROM lexicons WHERE specifier = ?",
+            (specifier,),
+        ).fetchone()
+        if lex_row is None:
+            raise ValueError(f"No lexicons found for specifier: {specifier}")
+
+        (lex_rowid, lex_id, lex_label, lex_lang, lex_email, lex_license,
+         lex_version, lex_url, lex_citation, lex_logo, lex_meta) = lex_row
+        R = (lex_rowid,)  # reusable param tuple
+
+        # -- Step 2: bulk-fetch all auxiliary data -----------------------------
+
+        # Entry indexes: entry_id -> lemma text
+        entry_index = dict(conn.execute(
+            "SELECT e.id, idx.lemma"
+            "  FROM entry_index AS idx"
+            "  JOIN entries AS e ON e.rowid = idx.entry_rowid"
+            " WHERE e.lexicon_rowid = ?", R,
+        ).fetchall())
+
+        # Forms grouped by entry_id, ordered by rank (rank 0 = lemma)
+        forms_by_entry: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT e.id, f.rowid, f.form, f.id, f.script, f.rank"
+            "  FROM forms AS f"
+            "  JOIN entries AS e ON e.rowid = f.entry_rowid"
+            " WHERE f.lexicon_rowid = ?"
+            " ORDER BY e.rowid, f.rank", R,
+        ).fetchall():
+            forms_by_entry[row[0]].append(row[1:])  # (form_rowid, form, form_id, script, rank)
+
+        # Pronunciations grouped by form_rowid
+        prons_by_form: Dict[int, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT p.form_rowid, p.value, p.variety, p.notation,"
+            "       p.phonemic, p.audio"
+            "  FROM pronunciations AS p"
+            " WHERE p.lexicon_rowid = ?", R,
+        ).fetchall():
+            prons_by_form[row[0]].append(row[1:])
+
+        # Tags grouped by form_rowid
+        tags_by_form: Dict[int, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT t.form_rowid, t.tag, t.category"
+            "  FROM tags AS t"
+            " WHERE t.lexicon_rowid = ?", R,
+        ).fetchall():
+            tags_by_form[row[0]].append(row[1:])
+
+        # Senses grouped by entry_id, ordered by rowid (matching exporter)
+        senses_by_entry: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT s.id, e.id, ss.id, s.entry_rank, s.metadata"
+            "  FROM senses AS s"
+            "  JOIN entries AS e ON e.rowid = s.entry_rowid"
+            "  JOIN synsets AS ss ON ss.rowid = s.synset_rowid"
+            " WHERE s.lexicon_rowid = ?"
+            " ORDER BY e.rowid, s.rowid", R,
+        ).fetchall():
+            senses_by_entry[row[1]].append((row[0], row[2], row[3], row[4]))
+            # (sense_id, synset_id, entry_rank, metadata)
+
+        # Sense relations grouped by source sense id
+        sense_rels: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT src.id, tgt.id, rt.type, srel.metadata"
+            "  FROM sense_relations AS srel"
+            "  JOIN senses AS src ON src.rowid = srel.source_rowid"
+            "  JOIN senses AS tgt ON tgt.rowid = srel.target_rowid"
+            "  JOIN relation_types AS rt ON rt.rowid = srel.type_rowid"
+            " WHERE srel.lexicon_rowid = ?", R,
+        ).fetchall():
+            sense_rels[row[0]].append({'target': row[1], 'relType': row[2], 'meta': row[3]})
+
+        # Sense-synset relations grouped by source sense id
+        for row in conn.execute(
+            "SELECT src.id, tgt.id, rt.type, srel.metadata"
+            "  FROM sense_synset_relations AS srel"
+            "  JOIN senses AS src ON src.rowid = srel.source_rowid"
+            "  JOIN synsets AS tgt ON tgt.rowid = srel.target_rowid"
+            "  JOIN relation_types AS rt ON rt.rowid = srel.type_rowid"
+            " WHERE srel.lexicon_rowid = ?", R,
+        ).fetchall():
+            sense_rels[row[0]].append({'target': row[1], 'relType': row[2], 'meta': row[3]})
+
+        # Sense examples grouped by sense id
+        sense_examples: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT s.id, ex.example, ex.language, ex.metadata"
+            "  FROM sense_examples AS ex"
+            "  JOIN senses AS s ON s.rowid = ex.sense_rowid"
+            " WHERE ex.lexicon_rowid = ?", R,
+        ).fetchall():
+            sense_examples[row[0]].append(
+                {'text': row[1], 'language': row[2] or '', 'meta': row[3]})
+
+        # Sense counts grouped by sense id
+        sense_counts: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT s.id, c.count, c.metadata"
+            "  FROM counts AS c"
+            "  JOIN senses AS s ON s.rowid = c.sense_rowid"
+            " WHERE c.lexicon_rowid = ?", R,
+        ).fetchall():
+            sense_counts[row[0]].append({'value': row[1], 'meta': row[2]})
+
+        # Unlexicalized senses (set of sense ids)
+        unlex_senses: set = {row[0] for row in conn.execute(
+            "SELECT s.id"
+            "  FROM unlexicalized_senses AS us"
+            "  JOIN senses AS s ON s.rowid = us.sense_rowid"
+            " WHERE s.lexicon_rowid = ?", R,
+        ).fetchall()}
+
+        # Adjpositions keyed by sense id
+        adjpositions: Dict[str, str] = dict(conn.execute(
+            "SELECT s.id, a.adjposition"
+            "  FROM adjpositions AS a"
+            "  JOIN senses AS s ON s.rowid = a.sense_rowid"
+            " WHERE s.lexicon_rowid = ?", R,
+        ).fetchall())
+
+        # Synset definitions grouped by synset id
+        synset_defs: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT ss.id, d.definition, d.language,"
+            "       (SELECT s.id FROM senses AS s"
+            "         WHERE s.rowid = d.sense_rowid), d.metadata"
+            "  FROM definitions AS d"
+            "  JOIN synsets AS ss ON ss.rowid = d.synset_rowid"
+            " WHERE d.lexicon_rowid = ?", R,
+        ).fetchall():
+            synset_defs[row[0]].append({
+                'text': row[1], 'language': row[2] or '',
+                'sourceSense': row[3] or '', 'meta': row[4],
+            })
+
+        # Synset relations grouped by source synset id
+        synset_rels: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT src.id, tgt.id, rt.type, srel.metadata"
+            "  FROM synset_relations AS srel"
+            "  JOIN synsets AS src ON src.rowid = srel.source_rowid"
+            "  JOIN synsets AS tgt ON tgt.rowid = srel.target_rowid"
+            "  JOIN relation_types AS rt ON rt.rowid = srel.type_rowid"
+            " WHERE srel.lexicon_rowid = ?", R,
+        ).fetchall():
+            synset_rels[row[0]].append(
+                {'target': row[1], 'relType': row[2], 'meta': row[3]})
+
+        # Synset examples grouped by synset id
+        synset_examples: Dict[str, List] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT ss.id, ex.example, ex.language, ex.metadata"
+            "  FROM synset_examples AS ex"
+            "  JOIN synsets AS ss ON ss.rowid = ex.synset_rowid"
+            " WHERE ex.lexicon_rowid = ?", R,
+        ).fetchall():
+            synset_examples[row[0]].append(
+                {'text': row[1], 'language': row[2] or '', 'meta': row[3]})
+
+        # Unlexicalized synsets (set of synset ids)
+        unlex_synsets: set = {row[0] for row in conn.execute(
+            "SELECT ss.id"
+            "  FROM unlexicalized_synsets AS us"
+            "  JOIN synsets AS ss ON ss.rowid = us.synset_rowid"
+            " WHERE ss.lexicon_rowid = ?", R,
+        ).fetchall()}
+
+        # Synset members grouped by synset id (for LMF >= 1.1)
+        synset_members: Dict[str, List[str]] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT ss.id, s.id"
+            "  FROM senses AS s"
+            "  JOIN synsets AS ss ON ss.rowid = s.synset_rowid"
+            " WHERE s.lexicon_rowid = ?"
+            " ORDER BY s.synset_rank", R,
+        ).fetchall():
+            synset_members[row[0]].append(row[1])
+
+        # Proposed ILIs grouped by synset id
+        proposed_ilis: Dict[str, tuple] = {}
+        for row in conn.execute(
+            "SELECT ss.id, pi.definition, pi.metadata"
+            "  FROM proposed_ilis AS pi"
+            "  JOIN synsets AS ss ON ss.rowid = pi.synset_rowid"
+            " WHERE ss.lexicon_rowid = ?", R,
+        ).fetchall():
+            proposed_ilis[row[0]] = (row[1], row[2])
+
+        # Syntactic behaviours
+        sb_frames: List[Dict] = []
+        for row in conn.execute(
+            "SELECT sb.id, sb.frame"
+            "  FROM syntactic_behaviours AS sb"
+            " WHERE sb.lexicon_rowid = ?", R,
+        ).fetchall():
+            sb_frames.append({'id': row[0] or '', 'subcategorizationFrame': row[1]})
+
+        # Syntactic behaviour sense map (for subcat on senses)
+        sb_map: Dict[str, List[str]] = defaultdict(list)
+        for row in conn.execute(
+            "SELECT s.id, sb.id"
+            "  FROM syntactic_behaviour_senses AS sbs"
+            "  JOIN syntactic_behaviours AS sb"
+            "    ON sb.rowid = sbs.syntactic_behaviour_rowid"
+            "  JOIN senses AS s ON s.rowid = sbs.sense_rowid"
+            " WHERE sb.lexicon_rowid = ?", R,
+        ).fetchall():
+            sb_map[row[0]].append(row[1])
+
+        # Lexicon dependencies
+        requires: List[Dict] = []
+        for row in conn.execute(
+            "SELECT provider_id, provider_version, provider_url"
+            "  FROM lexicon_dependencies"
+            " WHERE dependent_rowid = ?", R,
+        ).fetchall():
+            requires.append({'id': row[0], 'version': row[1], 'url': row[2]})
+
+        # -- Step 3: helper to build form dicts --------------------------------
+
+        def _build_form(form_rowid, written_form, form_id, script, is_lemma, pos=None):
+            prons = [
+                {'text': p[0], 'variety': p[1] or '', 'notation': p[2] or '',
+                 'phonemic': p[3], 'audio': p[4] or ''}
+                for p in prons_by_form.get(form_rowid, [])
+            ]
+            tgs = [
+                {'text': t[0], 'category': t[1]}
+                for t in tags_by_form.get(form_rowid, [])
+            ]
+            if is_lemma:
+                d: Dict[str, Any] = {
+                    'writtenForm': written_form,
+                    'partOfSpeech': pos,
+                    'script': script or '',
+                    'pronunciations': prons,
+                    'tags': tgs,
+                }
+            else:
+                d = {
+                    'writtenForm': written_form,
+                    'id': form_id or '',
+                    'script': script or '',
+                    'pronunciations': prons,
+                    'tags': tgs,
+                }
+            return d
+
+        # -- Step 4: assemble entries ------------------------------------------
+
+        entries: List[Dict] = []
+        for e_row in conn.execute(
+            "SELECT id, pos, metadata FROM entries"
+            " WHERE lexicon_rowid = ? ORDER BY rowid", R,
+        ).fetchall():
+            entry_id, pos, e_meta = e_row
+            index = entry_index.get(entry_id)
+
+            # Forms: first is lemma (rank 0), rest are additional forms
+            raw_forms = forms_by_entry.get(entry_id, [])
+            if raw_forms:
+                f_rowid, f_form, f_id, f_script, f_rank = raw_forms[0]
+                lemma_dict = _build_form(f_rowid, f_form, f_id, f_script, True, pos)
+                other_forms = [
+                    _build_form(fr, ff, fi, fs, False)
+                    for fr, ff, fi, fs, _ in raw_forms[1:]
+                ]
+            else:
+                lemma_dict = {'writtenForm': '', 'partOfSpeech': pos}
+                other_forms = []
+
+            # Senses
+            raw_senses = senses_by_entry.get(entry_id, [])
+            sense_list: List[Dict] = []
+            for i, (sense_id, synset_id, entry_rank, s_meta) in enumerate(raw_senses, 1):
+                # Compute n (same logic as _get_sense_n in wn._export)
+                n = 0
+                if entry_rank is not None and (index is not None or entry_rank != i):
+                    n = entry_rank
+
+                rels = sense_rels.get(sense_id, [])
+                exs = sense_examples.get(sense_id, [])
+                cts = sense_counts.get(sense_id, [])
+                adj = adjpositions.get(sense_id, '')
+                lexicalized = sense_id not in unlex_senses
+
+                sense_dict: Dict[str, Any] = {
+                    'id': sense_id,
+                    'synset': synset_id,
+                    'n': n,
+                    'relations': rels,
+                    'examples': exs,
+                    'counts': cts,
+                    'meta': s_meta,
+                    'lexicalized': lexicalized,
+                    'adjposition': adj,
+                }
+                if sense_id in sb_map:
+                    sense_dict['subcat'] = sorted(sb_map[sense_id])
+                sense_list.append(sense_dict)
+
+            entry_dict: Dict[str, Any] = {
+                'id': entry_id,
+                'lemma': lemma_dict,
+                'forms': other_forms,
+                'index': (index or ''),
+                'senses': sense_list,
+                'meta': e_meta,
+            }
+            entries.append(entry_dict)
+
+        # -- Step 5: assemble synsets ------------------------------------------
+
+        synsets: List[Dict] = []
+        for ss_row in conn.execute(
+            "SELECT ss.id, ss.pos,"
+            "       COALESCE(i.id, ''), ss.metadata,"
+            "       COALESCE(lf.name, '')"
+            "  FROM synsets AS ss"
+            "  LEFT JOIN ilis AS i ON i.rowid = ss.ili_rowid"
+            "  LEFT JOIN lexfiles AS lf ON lf.rowid = ss.lexfile_rowid"
+            " WHERE ss.lexicon_rowid = ?"
+            " ORDER BY ss.rowid", R,
+        ).fetchall():
+            ss_id, ss_pos, ili, ss_meta, lexfile = ss_row
+
+            # Proposed ILI
+            ili_def = None
+            if ss_id in proposed_ilis:
+                pi_text, pi_meta = proposed_ilis[ss_id]
+                ili_def = {'text': pi_text, 'meta': pi_meta}
+                if not ili:
+                    ili = 'in'  # special case for proposed ILIs
+
+            ss_dict: Dict[str, Any] = {
+                'id': ss_id,
+                'ili': ili or '',
+                'partOfSpeech': ss_pos,
+                'definitions': synset_defs.get(ss_id, []),
+                'relations': synset_rels.get(ss_id, []),
+                'examples': synset_examples.get(ss_id, []),
+                'lexicalized': ss_id not in unlex_synsets,
+                'lexfile': lexfile,
+                'meta': ss_meta,
+                'members': synset_members.get(ss_id, []),
+            }
+            if ili_def:
+                ss_dict['ili_definition'] = ili_def
+            synsets.append(ss_dict)
+
+        # -- Step 6: assemble lexicon and resource -----------------------------
+
+        lexicon_dict: Dict[str, Any] = {
+            'id': lex_id,
+            'label': lex_label,
+            'language': lex_lang,
+            'email': lex_email,
+            'license': lex_license,
+            'version': lex_version,
+            'url': lex_url or '',
+            'citation': lex_citation or '',
+            'logo': lex_logo or '',
+            'requires': requires,
+            'entries': entries,
+            'synsets': synsets,
+            'frames': sb_frames,
+            'meta': lex_meta,
+        }
+
+        return {
+            'lmf_version': version,
+            'lexicons': [lexicon_dict],
+        }
+
+    def _load_from_database_xml(self, specifier: str) -> Dict:
+        """
+        Fallback: load via XML roundtrip (wn.export -> temp file -> wn.lmf.load).
+
+        This ensures full compatibility with all wn.lmf data structures
+        even if wn internals change.
         """
         import tempfile
         import os
 
-        # Get lexicons from database
         wordnet = wn.Wordnet(specifier)
         lexicons = wordnet.lexicons()
 
         if not lexicons:
             raise ValueError(f"No lexicons found for specifier: {specifier}")
 
-        # Export to temp file and reload - this ensures proper structure
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.xml', delete=False
         ) as f:
             temp_path = f.name
 
         try:
-            wn.export(lexicons, temp_path)
+            wn.export(lexicons, temp_path, version=DEFAULT_LMF_VERSION)
             resource = lmf.load(temp_path)
-            
+
             # Sanitize: ensure 'ili' fields are strings, not None
-            # (wn.lmf.dump() cannot serialize None values in attributes)
             for lexicon in resource.get('lexicons', []):
                 for synset in lexicon.get('synsets', []):
                     if synset.get('ili') is None:
                         synset['ili'] = ''
-            
+
             return resource
         finally:
             if os.path.exists(temp_path):

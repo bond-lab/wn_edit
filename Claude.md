@@ -6,6 +6,10 @@ wn_edit is a Python editing extension for the [wn](https://github.com/goodmami/w
 
 Requires Python 3.10+ and wn >= 1.0.0.
 
+## Development environment
+
+Always use the hatch environment for running commands (tests, pip installs, benchmarks, etc.) — never use the system Python directly. All commands below use `hatch run`.
+
 ## Commands
 
 - `hatch run test` — fast tests only (default, skips `@pytest.mark.slow`)
@@ -22,8 +26,12 @@ Requires Python 3.10+ and wn >= 1.0.0.
 
 ## Architecture notes
 
-- `WordnetEditor` loads from the wn database via a roundtrip: `wn.export()` to temp XML, then `wn.lmf.load()` back into a dict. This is in `_load_from_database()`.
-- The wn database does **not** preserve the original LMF version. When loading from DB, `wn.export()`'s default version is used (currently 1.4). Users can override with `lmf_version=` in the constructor.
+- `WordnetEditor._load_from_database()` tries two paths:
+  1. `_load_from_database_bulk` — ~20 bulk SQL queries (fastest, ~10s for OEWN)
+  2. `_load_from_database_xml` — XML roundtrip via `wn.export()` + `wn.lmf.load()` (~140s, public API fallback)
+  The bulk path falls back on `ImportError`, `AttributeError`, or `sqlite3.OperationalError`.
+- The bulk path queries `wn._db.connect()` directly and matches the exporter's output exactly. It relies on wn's internal schema, so it falls back gracefully if the schema changes.
+- The wn database does **not** preserve the original LMF version. When loading from DB, `DEFAULT_LMF_VERSION` (1.4) is used. Users can override with `lmf_version=` in the constructor.
 - `wn.export()` with `version='1.0'` drops `lexfile` and `count` data. Versions 1.1+ preserve them.
 - In wn >= 1.0, `synset.ili` returns a `str` directly, not an object with an `.id` attribute.
 

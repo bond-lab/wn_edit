@@ -28,6 +28,7 @@ from wn_edit.editor import (
     make_form,
     validate_pos,
     validate_count,
+    WordnetEditor,
     PARTS_OF_SPEECH,
     HAS_WN,
 )
@@ -1227,3 +1228,115 @@ class TestWordnetEditorRoundTrip:
         cats = editor3.find_entries("cat")
         assert len(dogs) == 1
         assert len(cats) == 1
+
+
+@requires_wn
+class TestBulkLoaderEquivalence:
+    """Test that _load_from_database_bulk produces identical output to _load_from_database_xml."""
+
+    @pytest.fixture
+    def installed_lexicon(self, tmp_path):
+        """Create and install a test lexicon with lexfile and count data."""
+        import wn
+        import uuid
+
+        unique_id = f"test-exporter-{uuid.uuid4().hex[:8]}"
+
+        xml_content = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE LexicalResource SYSTEM "http://globalwordnet.github.io/schemas/WN-LMF-1.1.dtd">
+<LexicalResource xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <Lexicon id="{unique_id}"
+           label="Exporter Test"
+           language="en"
+           email="test@example.com"
+           license="https://example.com/license"
+           version="1.0">
+    <LexicalEntry id="{unique_id}-testword-entry">
+      <Lemma writtenForm="testword" partOfSpeech="n" />
+      <Sense id="{unique_id}-testword-sense-1" synset="{unique_id}-ss-1">
+        <Count>42</Count>
+      </Sense>
+      <Sense id="{unique_id}-testword-sense-2" synset="{unique_id}-ss-2">
+        <Count>7</Count>
+      </Sense>
+    </LexicalEntry>
+    <Synset id="{unique_id}-ss-1" ili="" partOfSpeech="n"
+            lexfile="noun.animal">
+      <Definition>A test concept</Definition>
+    </Synset>
+    <Synset id="{unique_id}-ss-2" ili="" partOfSpeech="n"
+            lexfile="noun.food">
+      <Definition>Another test concept</Definition>
+    </Synset>
+  </Lexicon>
+</LexicalResource>"""
+
+        xml_path = tmp_path / "exporter_test.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+        wn.add(xml_path)
+
+        yield unique_id, "1.0"
+
+        try:
+            wn.remove(f'{unique_id}:*')
+        except Exception:
+            pass
+
+    def test_bulk_matches_xml_roundtrip(self, installed_lexicon):
+        """Verify that _load_from_database_bulk matches _load_from_database_xml."""
+        lex_id, version = installed_lexicon
+        specifier = f"{lex_id}:{version}"
+
+        editor = WordnetEditor(create_new=True, lexicon_id="dummy")
+        bulk = editor._load_from_database_bulk(specifier)
+        xml = editor._load_from_database_xml(specifier)
+
+        assert bulk['lmf_version'] == xml['lmf_version']
+        assert len(bulk['lexicons']) == len(xml['lexicons'])
+
+        bulk_lex = bulk['lexicons'][0]
+        xml_lex = xml['lexicons'][0]
+
+        # Compare lexicon metadata
+        for key in ('id', 'label', 'language', 'email', 'license', 'version'):
+            assert bulk_lex[key] == xml_lex[key], f"Mismatch on lexicon['{key}']"
+
+        # Compare synsets
+        bulk_synsets = {s['id']: s for s in bulk_lex['synsets']}
+        xml_synsets = {s['id']: s for s in xml_lex['synsets']}
+        assert set(bulk_synsets.keys()) == set(xml_synsets.keys())
+
+        for sid in bulk_synsets:
+            bs = bulk_synsets[sid]
+            xs = xml_synsets[sid]
+            assert bs['partOfSpeech'] == xs['partOfSpeech'], f"POS mismatch on {sid}"
+            assert bs['ili'] == xs['ili'], f"ILI mismatch on {sid}"
+            assert bs.get('lexfile', '') == xs.get('lexfile', ''), f"lexfile mismatch on {sid}"
+            bulk_defs = [d['text'] for d in bs.get('definitions', [])]
+            xml_defs = [d['text'] for d in xs.get('definitions', [])]
+            assert bulk_defs == xml_defs, f"Definition mismatch on {sid}"
+
+        # Compare entries
+        bulk_entries = {e['id']: e for e in bulk_lex['entries']}
+        xml_entries = {e['id']: e for e in xml_lex['entries']}
+        assert set(bulk_entries.keys()) == set(xml_entries.keys())
+
+        for eid in bulk_entries:
+            be = bulk_entries[eid]
+            xe = xml_entries[eid]
+            assert be['lemma']['writtenForm'] == xe['lemma']['writtenForm']
+            assert be['lemma']['partOfSpeech'] == xe['lemma']['partOfSpeech']
+
+            # Compare senses
+            bulk_senses = {s['id']: s for s in be.get('senses', [])}
+            xml_senses = {s['id']: s for s in xe.get('senses', [])}
+            assert set(bulk_senses.keys()) == set(xml_senses.keys())
+
+            for sense_id in bulk_senses:
+                b_sense = bulk_senses[sense_id]
+                x_sense = xml_senses[sense_id]
+                assert b_sense['synset'] == x_sense['synset'], f"synset mismatch on {sense_id}"
+                bulk_counts = [c['value'] for c in b_sense.get('counts', [])]
+                xml_counts = [c['value'] for c in x_sense.get('counts', [])]
+                assert bulk_counts == xml_counts, f"count mismatch on {sense_id}"
